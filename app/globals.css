@@ -1,0 +1,53 @@
+@import "tailwindcss";
+
+:root {
+  --background: #020617;
+  --foreground: #e2e8f0;
+}
+
+html, body { background: var(--background); color: var(--foreground); }
+body { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+
+.stage-bg {
+  background:
+    radial-gradient(1200px 600px at 10% -10%, rgba(99, 102, 241, 0.35), transparent 60%),
+    radial-gradient(900px 500px at 110% 110%, rgba(14, 165, 233, 0.25), transparent 60%),
+    linear-gradient(160deg, #0b1023 0%, #111836 55%, #0a1a2f 100%);
+}
+
+.card { @apply rounded-2xl border border-slate-800 bg-slate-900/70 shadow-lg shadow-black/20; }
+.card-h { @apply flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-2.5 text-sm font-semibold text-slate-200; }
+.btn { @apply inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-1.5 text-sm font-semibold transition focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400 disabled:cursor-not-allowed disabled:opacity-40; }
+.btn-primary { @apply bg-indigo-600 text-white hover:bg-indigo-500; }
+.btn-ghost { @apply bg-slate-800 text-slate-200 hover:bg-slate-700; }
+.btn-danger { @apply bg-rose-600 text-white hover:bg-rose-500; }
+.btn-success { @apply bg-emerald-600 text-white hover:bg-emerald-500; }
+.chip { @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-semibold; }
+
+@keyframes ringPulse { 0% { transform: scale(.8); opacity: .9 } 100% { transform: scale(1.6); opacity: 0 } }
+.ring-pulse { animation: ringPulse 2.2s ease-out infinite; }
+
+@keyframes fadeUp { from { opacity: 0; transform: translateY(14px) } to { opacity: 1; transform: none } }
+.fade-up { animation: fadeUp .6s cubic-bezier(.2,.8,.2,1) both; }
+
+@keyframes pop { 0% { opacity: 0; transform: scale(.6) } 70% { transform: scale(1.06) } 100% { opacity: 1; transform: none } }
+.pop { animation: pop .7s cubic-bezier(.2,.8,.2,1) both; }
+
+@keyframes spin { to { transform: rotate(360deg) } }
+.spinner { width: 1em; height: 1em; border-radius: 9999px; border: 3px solid rgba(255,255,255,.25); border-top-color: #fff; animation: spin .9s linear infinite; display: inline-block; }
+
+@keyframes dash { to { stroke-dashoffset: -36 } }
+.dash { animation: dash 1s linear infinite; }
+
+@keyframes growX { from { transform: scaleX(0) } to { transform: scaleX(1) } }
+.grow-x { transform-origin: left; animation: growX 1s cubic-bezier(.2,.8,.2,1) both; }
+
+@keyframes slideIn { from { opacity: 0; transform: translateX(-8px) } to { opacity: 1; transform: none } }
+.slide-in { animation: slideIn .35s ease-out both; }
+
+@keyframes eq { 0%,100% { height: 20% } 50% { height: 100% } }
+.eq span { animation: eq .9s ease-in-out infinite; }
+.eq span:nth-child(2) { animation-delay: .15s } .eq span:nth-child(3) { animation-delay: .3s } .eq span:nth-child(4) { animation-delay: .45s }
+
+::-webkit-scrollbar { width: 8px; height: 8px }
+::-webkit-scrollbar-thumb { background: #334155; border-radius: 8px }
