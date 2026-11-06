@@ -1,11 +1,32 @@
 // Thin client for the server-side AI gateway.
-export async function llmStatus(): Promise<{ enabled: boolean; model?: string }> {
+export async function llmStatus(): Promise<{ enabled: boolean; model?: string; engine?: "api" | "claude-code" }> {
   try {
     const r = await fetch("/api/ai", { cache: "no-store" });
     return await r.json();
   } catch {
     return { enabled: false };
   }
+}
+
+/** Streams a text reply. Resolves with the full text, or "" if nothing arrived. */
+export async function llmStream(task: string, payload: Record<string, unknown>, onText: (chunk: string) => void, signal: AbortSignal): Promise<string> {
+  let full = "";
+  try {
+    const r = await fetch("/api/ai", {
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ task, stream: true, ...payload }), signal,
+    });
+    if (!r.ok || !r.body) return "";
+    const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      full += value;
+      onText(value);
+    }
+  } catch {
+    /* aborted or offline: the caller works from whatever text it already has */
+  }
+  return full;
 }
 
 export async function llmCall<T = unknown>(task: string, payload: Record<string, unknown>): Promise<T | null> {

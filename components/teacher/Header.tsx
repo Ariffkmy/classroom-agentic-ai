@@ -53,7 +53,7 @@ export default function Header({ state, engine, micWanted, setMicWanted }: { sta
         )}
 
         <span className={`chip ${state.aiProvider.llm ? "bg-emerald-500/15 text-emerald-200" : "bg-slate-800 text-slate-300"}`} title="Language-model provider">
-          🧠 {state.aiProvider.llm ? `LLM: ${state.aiProvider.model}` : "On-device agents (offline-safe)"}
+          🧠 {state.aiProvider.llm ? state.aiProvider.model : "On-device agents (offline-safe)"}
         </span>
 
         <div className="ml-auto flex flex-wrap items-center gap-2">

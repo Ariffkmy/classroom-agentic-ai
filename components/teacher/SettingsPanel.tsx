@@ -23,7 +23,7 @@ export default function SettingsPanel({ state, engine }: { state: ClassroomState
             onChange={(e) => engine.updateSettings({ failureMode: e.target.value as typeof s.failureMode })}
           >
             <option value="none">None</option>
-            <option value="generation">Video provider fails (AT-12)</option>
+            <option value="generation">Script service fails (AT-12)</option>
             <option value="validation">Content fails a check (AT-07)</option>
           </select>
         </div>

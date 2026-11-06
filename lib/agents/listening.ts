@@ -63,6 +63,26 @@ export function isAddressedToAI(text: string) {
   return WAKE.test(text);
 }
 
+const WORDS_FOLLOW_UP = 14;
+const FOLLOW_UP = /^(why|how|what|when|where|who|which|whose|can|could|would|should|is|are|does|do you|did|really|explain|tell|show|give|say|repeat|again|more|another|sorry|pardon|i don'?t|kenapa|mengapa|bagaimana|macam mana|apa|boleh|cuba|terangkan|lagi|maaf)\b/i;
+const CLOSING = /^(ok(ay)?[, ]*)?(thanks|thank you|terima kasih|that'?s all|that is all|no thanks|got it|good|great|perfect|cool|nice|alright|all right|baik|bagus)\b/i;
+
+/**
+ * Sorts what the teacher said just after an AI reply. Without a wake phrase the only clues are
+ * the wording and the length: teaching tends to be statements, and to run longer.
+ */
+export function classifyReply(text: string): "followup" | "close" | "teaching" {
+  const t = text.trim();
+  const words = t.split(/\s+/).filter(Boolean).length;
+  if (words <= 6 && CLOSING.test(t)) return "close";
+  if (t.endsWith("?")) return "followup";
+  // Speech recognition rarely adds a question mark, and people lead in with "so" or "okay".
+  const lead = t.replace(/^(so|and|but|okay|ok|then|right|hmm|um)[,\s]+/i, "");
+  return words <= WORDS_FOLLOW_UP && FOLLOW_UP.test(lead) ? "followup" : "teaching";
+}
+
+export const withoutWake = (raw: string) => raw.replace(WAKE, "").replace(/^[\s,.:;!-]+/, "").trim() || raw.trim();
+
 export type Intent =
   | { type: "simpler" }
   | { type: "example" }
@@ -87,5 +107,5 @@ export function parseIntent(raw: string): Intent {
   if (/\b(simpler|simple language|easier|simplify|more simply)\b/.test(t)) return { type: "simpler" };
   if (/\b(example|real[- ]life|everyday|real world)\b/.test(t)) return { type: "example" };
   if (/\b(summary|summari[sz]e|recap)\b/.test(t)) return { type: "summary" };
-  return { type: "question", text: raw.replace(WAKE, "").trim() };
+  return { type: "question", text: withoutWake(raw) };
 }

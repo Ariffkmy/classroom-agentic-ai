@@ -47,7 +47,7 @@ export default function TranscriptPanel({ state, engine }: { state: ClassroomSta
           <div className="rounded-xl border border-dashed border-slate-700 p-4 text-sm text-slate-400">
             Start the lesson and simply teach. No subject or topic setup needed — the AI works it out.
             <br />
-            <span className="text-slate-500">Talk to the AI by starting with “Hey assistant…”.</span>
+            <span className="text-slate-500">Talk to the AI by starting with “Hey assistant…”. After it replies, just answer back.</span>
           </div>
         )}
         {state.transcript.map((s) => (
@@ -75,6 +75,18 @@ export default function TranscriptPanel({ state, engine }: { state: ClassroomSta
       </div>
 
       <div className="space-y-2 border-t border-slate-800 p-3">
+        <div role="status" aria-live="polite">
+          {state.conversation.thinking && (
+            <div className="flex items-center gap-2 rounded-lg bg-amber-500/10 px-3 py-1.5 text-xs text-amber-100 ring-1 ring-amber-500/30">
+              <span className="spinner !h-3 !w-3 !border-2" /> Thinking…
+            </div>
+          )}
+          {state.conversation.listeningUntil > 0 && !state.conversation.thinking && (
+            <div className="rounded-lg bg-emerald-500/10 px-3 py-1.5 text-xs text-emerald-100 ring-1 ring-emerald-500/30">
+              💬 Go ahead, I&apos;m listening. No need to say “Hey assistant”. Say “thanks” to finish.
+            </div>
+          )}
+        </div>
         <div className="flex flex-wrap gap-1.5">
           {QUICK.map(([label, cmd]) => (
             <button key={label} className="btn btn-ghost !px-2 !py-1 !text-xs" onClick={() => engine.ingest(cmd, "text")} title={cmd}>

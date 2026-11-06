@@ -5,6 +5,8 @@
 import { useEffect, useRef, useState } from "react";
 import type { ClassroomState } from "@/lib/types";
 import SceneVisual from "./visuals/SceneVisual";
+import ReelScene from "./visuals/ReelScene";
+import { DISCUSS_LABEL } from "@/lib/reel/styles";
 
 const LETTERS = ["A", "B", "C", "D", "E"];
 const OPTION_COLORS = ["bg-sky-600", "bg-violet-600", "bg-amber-600", "bg-emerald-600"];
@@ -48,7 +50,7 @@ export default function Stage({ state }: { state: ClassroomState }) {
 function PrivacyBar({ state }: { state: ClassroomState }) {
   const on = state.listening === "listening" || state.demo.running;
   return (
-    <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between bg-black/40 px-6 py-2 text-[15px] text-slate-300">
+    <div className="absolute bottom-0 left-0 right-0 z-10 flex items-center justify-between bg-black/70 px-6 py-2 text-[15px] text-slate-300">
       <span className="flex items-center gap-2">
         <span className={`inline-block h-3 w-3 rounded-full ${on ? "bg-red-500 animate-pulse" : "bg-slate-500"}`} aria-hidden />
         {on ? "AI assistant is listening to the teacher" : "AI listening is OFF"} · audio is never stored · no cameras, no student identification
@@ -93,6 +95,30 @@ function ContentView({ state }: { state: ClassroomState }) {
   const asset = state.assets.find((a) => a.id === p.assetId);
   if (!asset) return null;
   const sc = asset.scenes[p.scene];
+  if (!sc) return null;
+  if (sc.visual.kind === "reel") {
+    const cfg = state.settings.reel;
+    return (
+      <>
+        <ReelScene
+          key={`${asset.id}-${p.scene}`}
+          scene={sc}
+          style={cfg.style}
+          showCaptions={cfg.captions}
+          motif={asset.reel?.motif}
+          discuss={DISCUSS_LABEL[asset.reel?.language ?? "en"]}
+          playing={p.playing}
+          startedAt={p.sceneStartedAt}
+        />
+        {!p.playing && <span className="absolute right-6 top-5 rounded-full bg-amber-500 px-4 py-1 text-[15px] font-bold text-slate-950">⏸ Paused</span>}
+        <div className="absolute bottom-10 left-1/2 flex -translate-x-1/2 gap-2 rounded-full bg-black/60 px-3 py-1.5" aria-label={`Scene ${p.scene + 1} of ${asset.scenes.length}`}>
+          {asset.scenes.map((_, i) => (
+            <span key={i} className={`h-1.5 rounded-full transition-all ${i === p.scene ? "w-8 bg-white" : i < p.scene ? "w-3 bg-white/70" : "w-3 bg-white/30"}`} />
+          ))}
+        </div>
+      </>
+    );
+  }
   return (
     <div className="flex h-full flex-col px-10 pb-14 pt-6">
       <div className="flex items-center justify-between">

@@ -3,6 +3,7 @@
 // forwarded to the orchestrator; interim text is shown as live captions.
 import { useCallback, useEffect, useRef } from "react";
 import type { ClassroomEngine } from "@/lib/engine";
+import { isAddressedToAI } from "@/lib/agents/listening";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export function useSpeechRecognition(engine: ClassroomEngine, wanted: boolean) {
@@ -30,14 +31,16 @@ export function useSpeechRecognition(engine: ClassroomEngine, wanted: boolean) {
     rec.interimResults = true;
     rec.lang = "en-MY";
     rec.onresult = (e: any) => {
-      if (engine.isEchoWindow) return; // ignore the AI's own voice
+      // Ignore the AI's own voice, but let the teacher cut in by using the wake phrase.
+      const echo = engine.isEchoWindow;
       let interim = "";
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i];
-        if (r.isFinal) engine.ingest(r[0].transcript, "mic");
-        else interim += r[0].transcript;
+        if (r.isFinal) {
+          if (!echo || isAddressedToAI(r[0].transcript)) engine.ingest(r[0].transcript, "mic");
+        } else if (!echo) interim += r[0].transcript;
       }
-      engine.setInterim(interim);
+      if (!echo) engine.setInterim(interim);
     };
     rec.onerror = (e: any) => {
       if (e.error === "not-allowed" || e.error === "service-not-allowed") engine.setListening("denied");

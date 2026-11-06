@@ -50,7 +50,24 @@ export type SceneVisual =
   | { kind: "ladder"; step: number; a?: number; b?: number }
   | { kind: "triangle"; rotation: number; labels: [string, string, string]; highlight?: "hyp" | "right" | "none" }
   | { kind: "emoji"; emoji: string[] }
-  | { kind: "photosynthesis"; step: number };
+  | { kind: "photosynthesis"; step: number }
+  | { kind: "reel"; headline: string; block: ReelBlock; role: "hook" | "body" | "question" };
+
+// A reel scene's main picture. The script writer picks one block per spoken sentence and the
+// toolkit in lib/reel/kit.ts draws it. Blocks are data, so generated text is never run as code.
+export type ReelBlock =
+  | { type: "headline" }
+  | { type: "card"; title: string; body?: string; icon?: string }
+  | { type: "stat"; to: number; from?: number; prefix?: string; suffix?: string; dec?: number; label: string }
+  | { type: "checklist"; items: string[] }
+  | { type: "bars"; data: { label: string; v: number; hi?: boolean }[] }
+  | { type: "flow"; items: { icon?: string; label: string }[] }
+  | { type: "compare"; left: { title: string; body?: string }; right: { title: string; body?: string }; strikeLeft?: boolean }
+  | { type: "formula"; steps: string[] }
+  | { type: "triangle"; a: string; b: string; c: string; highlight: "hyp" | "right" | "none" }
+  | { type: "fraction"; parts: number; shaded: number; label: string }
+  | { type: "objects"; items: { icon: string; label: string }[] }
+  | { type: "question"; text: string };
 
 export interface Scene {
   title: string;
@@ -81,6 +98,7 @@ export interface GeneratedAsset {
   validation?: ValidationCheck[];
   presentedAt?: number;
   provider: string;
+  reel?: { motif?: string; language: ReelLanguageId; notes?: string };
 }
 
 export type TaskStatus =
@@ -203,7 +221,21 @@ export interface Presentation {
   waitingAssetId?: string; // ready, waiting for a natural pause
 }
 
+export type ReelStyleId = "paper" | "storybook" | "blueprint" | "poster" | "neon";
+export type ReelLanguageId = "en" | "ms-formal" | "ms-casual" | "mixed";
+
+// What the teacher may configure. The script itself is deliberately absent: it is always
+// written automatically from what the Listening agent heard.
+export interface ReelConfig {
+  style: ReelStyleId;
+  language: ReelLanguageId;
+  lengthSec: number;
+  captions: boolean;
+  voice: string; // browser voice name; "" = pick automatically for the language
+}
+
 export interface Settings {
+  reel: ReelConfig;
   autoGenerate: boolean;
   autoPresent: boolean;
   voiceOutput: boolean;
@@ -211,6 +243,17 @@ export interface Settings {
   failureMode: "none" | "generation" | "validation";
   pauseThresholdMs: number;
   cooldownMs: number;
+}
+
+export interface ChatTurn {
+  role: "teacher" | "ai";
+  text: string;
+}
+
+export interface Conversation {
+  turns: ChatTurn[]; // recent back-and-forth, so "explain that again" has a referent
+  thinking: boolean; // waiting for the first words of a reply
+  listeningUntil: number; // until this time, a reply needs no wake phrase (0 = closed)
 }
 
 export type ListeningStatus = "off" | "listening" | "paused" | "denied" | "unsupported";
@@ -237,7 +280,8 @@ export interface ClassroomState {
   log: LogEntry[];
   settings: Settings;
   voice: { speaking: boolean; queue: number; last?: string };
+  conversation: Conversation;
   demo: { running: boolean; script: string | null; index: number; total: number };
-  aiProvider: { llm: boolean; model?: string };
+  aiProvider: { llm: boolean; model?: string; engine?: "api" | "claude-code" };
   teacherActions: { t: number; action: string; ref?: string }[];
 }

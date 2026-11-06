@@ -18,7 +18,7 @@ const TESTS = [
   ["AT-08", "Dismiss stops presentation", "✕ Dismiss or Esc"],
   ["AT-09", "Teacher requests quiz", "“Hey assistant, prepare five questions…”"],
   ["AT-10/11", "Group results & follow-up", "Fill demo group answers → Analyse responses"],
-  ["AT-12", "Video service fails", "Failure drill › Video provider fails"],
+  ["AT-12", "Script service fails", "Failure drill › Script service fails"],
   ["AT-13", "Pause listening", "⏸ Pause listening — mic badge turns grey"],
 ];
 

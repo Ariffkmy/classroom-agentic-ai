@@ -6,16 +6,19 @@
 // is never blocked. Every decision is written to the agent activity log.
 
 import type {
-  AgentName, AssetFormat, ClassroomState, GeneratedAsset, GenerationTask, LogEntry,
-  Quiz, QuizQuestion, Scene, Settings, ValidationCheck,
+  AgentName, AssetFormat, ChatTurn, ClassroomState, GeneratedAsset, GenerationTask, LogEntry,
+  Quiz, QuizQuestion, ReelConfig, Scene, Settings, ValidationCheck,
 } from "./types";
 import { getTopic, TOPICS, type TopicEntry } from "./curriculum";
-import { classify, extractConcepts, extractKeywords, isAddressedToAI, parseIntent, scoreSegment, type Intent } from "./agents/listening";
+import { classify, classifyReply, extractConcepts, extractKeywords, isAddressedToAI, parseIntent, scoreSegment, withoutWake, type Intent } from "./agents/listening";
 import { checksPassed, pendingChecks, validateAsset, validateQuiz } from "./agents/validator";
 import { analyse } from "./agents/assessment";
-import { Speaker } from "./voice";
-import { llmCall, llmStatus } from "./llm";
+import { Speaker, type VoiceChoice } from "./voice";
+import { llmCall, llmStatus, llmStream } from "./llm";
 import { DEMO_SCRIPTS } from "./demoScripts";
+import { composeOffline } from "./reel/composer";
+import { planToScenes, sanitizePlan, wordsTarget, type ReelInput, type ReelPlan } from "./reel/plan";
+import { DEFAULT_REEL, reelLanguage, reelStyle } from "./reel/styles";
 
 const uid = (p = "") => p + Math.random().toString(36).slice(2, 9);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
@@ -24,8 +27,23 @@ const CHANNEL = "asc-display";
 const GROUPS = ["Group A", "Group B", "Group C", "Group D", "Group E", "Group F"];
 const SCORE_DECAY = 0.6;
 const CONFIDENT = 0.5;
+const SCRIPT_SEGMENTS = 14; // how much recent teaching a script is written from
+const REPLY_WINDOW_MS = 10000; // after an AI reply, the teacher can answer without the wake phrase
+const REPLY_EXTEND_MS = 4000; // keeps the window open while the teacher is mid-sentence
+const CHAT_TURNS = 6;
+
+interface ReelJob { focus?: string; variant?: boolean; keepTitle?: boolean }
+interface ReelResult { title: string; scenes: Scene[]; provider: string; motif?: string; notes?: string }
+
+interface ContentTaskOptions {
+  topicId: string; title: string; format: AssetFormat; brief: string; reason: string;
+  requestedBy: "agent" | "teacher"; objectives: { code: string; text: string }[];
+  write: (stage: (name: string, progress: number) => void) => Promise<ReelResult>;
+  job?: ReelJob; revisionOf?: string; isFallbackFor?: string; fast?: boolean;
+}
 
 export const DEFAULT_SETTINGS: Settings = {
+  reel: DEFAULT_REEL,
   autoGenerate: true,
   autoPresent: true,
   voiceOutput: true,
@@ -56,6 +74,7 @@ function initialState(settings: Settings = DEFAULT_SETTINGS): ClassroomState {
     log: [],
     settings,
     voice: { speaking: false, queue: 0 },
+    conversation: { turns: [], thinking: false, listeningUntil: 0 },
     demo: { running: false, script: null, index: 0, total: 0 },
     aiProvider: { llm: false },
     teacherActions: [],
@@ -69,7 +88,12 @@ export class ClassroomEngine {
   private listeners = new Set<() => void>();
   private channel: BroadcastChannel | null = null;
   private speaker = new Speaker();
-  private speechQueue: { text: string; immediate?: boolean }[] = [];
+  private speechQueue: { text: string; immediate?: boolean; reply?: boolean }[] = [];
+  private replyRun = 0; // bumping this orphans whatever reply was in progress
+  private replyAbort: AbortController | null = null;
+  private replySentences: string[] = [];
+  private replySpeaking = false;
+  private replyStreamDone = false;
   private speakingUntilIgnore = 0;
   private tickHandle: ReturnType<typeof setInterval> | null = null;
   private saveHandle: ReturnType<typeof setTimeout> | null = null;
@@ -127,7 +151,7 @@ export class ClassroomEngine {
     this.tickHandle = setInterval(() => this.tick(), 250);
     llmStatus().then((r) =>
       this.update((s) => {
-        s.aiProvider = { llm: r.enabled, model: r.model };
+        s.aiProvider = { llm: r.enabled, model: r.model, engine: r.engine };
       }),
     );
   }
@@ -183,6 +207,7 @@ export class ClassroomEngine {
         listening: "off",
         interim: "",
         voice: { speaking: false, queue: 0 },
+        conversation: { turns: saved.conversation?.turns ?? [], thinking: false, listeningUntil: 0 },
         demo: base.demo,
         presentation: base.presentation,
         settings: { ...DEFAULT_SETTINGS, ...saved.settings, failureMode: "none" },
@@ -199,6 +224,7 @@ export class ClassroomEngine {
   }
 
   reset(keepFaultDrill = false) {
+    this.cancelReply();
     this.speaker.cancel();
     this.speechQueue = [];
     this.demoTyping = null;
@@ -226,6 +252,8 @@ export class ClassroomEngine {
 
   endLesson() {
     this.stopDemo();
+    this.cancelReply();
+    this.closeConversation();
     this.speaker.cancel();
     this.speechQueue = [];
     this.update((s) => {
@@ -269,6 +297,14 @@ export class ClassroomEngine {
       this.log("System", "warning", `Fault injection armed: the next content task will simulate a ${patch.failureMode === "generation" ? "video-provider failure" : "failed validation check"}.`);
   }
 
+  updateReel(patch: Partial<ReelConfig>) {
+    this.update((s) => {
+      s.settings.reel = { ...s.settings.reel, ...patch };
+    });
+    const [k, v] = Object.entries(patch)[0];
+    this.teacherAction(`reel_${k}`, String(v));
+  }
+
   // ---------- Listening input ----------
 
   /** Should microphone results be ignored (AI's own voice echo)? */
@@ -280,6 +316,7 @@ export class ClassroomEngine {
     this.update((s) => {
       s.interim = text;
       if (text) s.lastTeacherSpeechAt = Date.now();
+      if (text && s.conversation.listeningUntil) s.conversation.listeningUntil = Math.max(s.conversation.listeningUntil, Date.now() + REPLY_EXTEND_MS);
     });
   }
 
@@ -287,7 +324,9 @@ export class ClassroomEngine {
     const text = raw.trim();
     if (!text) return;
     if (this.state.lesson.status !== "live") this.startLesson();
-    const addressed = isAddressedToAI(text);
+    const inWindow = source !== "demo" && Date.now() < this.state.conversation.listeningUntil;
+    const reply = inWindow && !isAddressedToAI(text) ? classifyReply(text) : "teaching";
+    const addressed = isAddressedToAI(text) || reply !== "teaching";
     this.update((s) => {
       s.transcript.push({ id: uid(), t: Date.now(), speaker: "teacher", text, addressedToAI: addressed, source });
       if (s.transcript.length > 300) s.transcript.splice(0, s.transcript.length - 300);
@@ -295,12 +334,22 @@ export class ClassroomEngine {
       s.lastTeacherSpeechAt = Date.now();
     });
 
-    if (addressed) {
-      const intent = parseIntent(text);
-      this.log("Listening", "decision", `Direct request to the AI detected → intent "${intent.type}".`, text);
-      void this.handleIntent(intent);
+    if (reply === "close") {
+      this.closeConversation();
+      this.log("Listening", "info", "Teacher closed the conversation.");
       return;
     }
+    if (addressed) {
+      const parsed = parseIntent(text);
+      // Mid-conversation, "another example" means another one than the AI just gave, which a
+      // stored answer can't do, so it goes to the model along with the conversation so far.
+      const refine = inWindow && this.state.aiProvider.llm && ["example", "simpler", "summary"].includes(parsed.type);
+      const intent: Intent = refine ? { type: "question", text: withoutWake(text) } : parsed;
+      this.log("Listening", "decision", `${inWindow ? "Reply in the conversation" : "Direct request to the AI"} detected → intent "${intent.type}".`, text);
+      void this.handleIntent(intent, text);
+      return;
+    }
+    if (inWindow) this.closeConversation(); // the teacher has gone back to teaching
     this.understand(text);
   }
 
@@ -404,6 +453,7 @@ export class ClassroomEngine {
     });
     this.log("Listening", "decision", `LLM inferred "${r.subject} — ${r.topic}" (${Math.round(r.confidence * 100)}%).`);
     this.log("Curriculum", "warning", "No configured curriculum source for this topic. Objectives are labelled UNVERIFIED.");
+    this.planContent();
   }
 
   private async retrieveCurriculum(topic: TopicEntry) {
@@ -460,64 +510,76 @@ export class ClassroomEngine {
       this.log(
         "Orchestrator",
         "decision",
-        `Teacher has explained "${topic.planTrigger}" verbally only. A concrete real-world visual would help students. Decision: generate a narrated ${topic.animation.format} in the background.`,
+        `Teacher has explained "${topic.planTrigger}" verbally only. A concrete visual would help students. Decision: write a script from what the teacher said and build a narrated video in the background.`,
         `Supports objectives ${objs}. No similar asset exists for this topic. Teacher can keep teaching.`,
       );
-      this.createContentTask({
-        topicId: topic.id, title: topic.animation.title, format: topic.animation.format, brief: topic.animation.brief,
-        reason: `Make "${topic.planTrigger}" concrete with a real-world example`, requestedBy: "agent",
-        scenes: () => topic.animation.scenes, objectives: topic.curriculum.objectives.slice(0, 4),
-      });
+      this.createReelTask({ topicId: topic.id, reason: `Make "${topic.planTrigger}" concrete`, requestedBy: "agent", objectives: topic.curriculum.objectives.slice(0, 4) });
     } else if (s.context.source === "llm" && s.aiProvider.llm) {
       this.lastAgentTaskAt = Date.now();
       this.lastAgentTaskTopic = s.context.topicId;
-      this.log("Orchestrator", "decision", `Lesson on "${s.context.topic}" would benefit from a visual storyboard. Asking the Content agent to draft one.`);
-      this.createContentTask({
-        topicId: s.context.topicId!, title: `Storyboard: ${s.context.topic}`, format: "storyboard",
-        brief: `Real-world storyboard for ${s.context.topic} (${s.context.level}).`, reason: "Engagement + concrete example", requestedBy: "agent",
-        scenes: () => this.llmStoryboard(), objectives: s.curriculum?.objectives ?? [],
-      });
+      this.log("Orchestrator", "decision", `Lesson on "${s.context.topic}" would benefit from a visual. Asking the Content agent to write one from what the teacher said.`);
+      this.createReelTask({ topicId: s.context.topicId!, reason: "Make the idea concrete", requestedBy: "agent", objectives: s.curriculum?.objectives ?? [] });
     }
   }
 
-  private async llmStoryboard(): Promise<Scene[]> {
-    const c = this.state.context;
-    const r = await llmCall<{ title: string; scenes: { title: string; caption: string; narration: string; formula?: string | null; emoji: string[] }[] }>("storyboard", {
-      context: { subject: c.subject, topic: c.topic, level: c.level, concepts: c.concepts },
-    });
-    if (!r?.scenes?.length) throw new Error("Storyboard provider returned no scenes");
-    return r.scenes.map((sc) => ({
-      title: sc.title, caption: sc.caption, narration: sc.narration, formula: sc.formula ?? undefined,
-      visual: { kind: "emoji", emoji: sc.emoji?.length ? sc.emoji : ["💡"] }, durationMs: Math.max(5000, Math.min(10000, sc.narration.length * 70)),
-    }));
+  // ---------- Script writing (Content agent, after Reel Studio's plan step) ----------
+
+  private reelInput(topicName: string, job: ReelJob): ReelInput {
+    const s = this.state;
+    const cfg = s.settings.reel;
+    const style = reelStyle(cfg.style);
+    const lang = reelLanguage(cfg.language);
+    return {
+      subject: s.context.subject ?? "General", topic: topicName, level: s.context.level ?? "Secondary",
+      concepts: s.context.concepts, keywords: s.context.keywords,
+      objectives: (s.curriculum?.objectives ?? []).map((x) => `${x.code} ${x.text}`),
+      sentences: s.transcript.filter((t) => t.speaker === "teacher" && !t.addressedToAI).slice(-SCRIPT_SEGMENTS).map((t) => t.text),
+      focus: job.focus, variant: job.variant,
+      style: { name: style.name, brief: style.brief }, language: { label: lang.label, rules: lang.rules },
+      lengthSec: cfg.lengthSec, wordsTarget: wordsTarget(cfg),
+    };
   }
 
-  private variantScenes(topic: TopicEntry): Scene[] {
-    const emojis = ["📺", "🏫", "🧱", "🌿", "🫧", "🍕"];
-    return topic.everydayExamples.map((ex, i) => ({
-      title: `Real-life example ${i + 1}`,
-      caption: ex,
-      narration: ex.replace(/²/g, " squared").replace(/√/g, "the square root of "),
-      visual: { kind: "emoji" as const, emoji: [emojis[(i + (topic.id.includes("sci") ? 3 : 0)) % emojis.length]] },
-      durationMs: 9000,
-      formula: i === 0 && topic.id === "math-pythagoras" ? "36² + 48² = 1296 + 2304 = 3600 = 60²" : undefined,
-    })).concat([{
-      title: "Your turn",
-      caption: "Can your group think of another place you see this in real life?",
-      narration: "Your turn. Can your group think of another place where you see this in real life?",
-      visual: { kind: "emoji" as const, emoji: ["🤔"] },
-      durationMs: 7000,
-      formula: undefined,
-    }]);
+  /** Turns what the Listening agent heard into a script and scenes. Nothing here is pre-written. */
+  private async writeReel(job: ReelJob, stage: (name: string, progress: number) => void): Promise<ReelResult> {
+    const cfg = this.state.settings.reel;
+    const input = this.reelInput(this.state.context.topic ?? "this lesson", job);
+    stage(`Reading ${input.sentences.length} lesson segments`, 12);
+    let plan: ReelPlan | null = null;
+    let provider = "On-device composer (teacher's own sentences)";
+    const ai = this.state.aiProvider;
+    if (ai.llm) {
+      stage(`Writing the script with ${ai.model}`, 30);
+      plan = sanitizePlan(await llmCall("reel", { reel: input }));
+      if (plan) provider = ai.model ?? "Claude";
+      else this.log("Content", "warning", "The language model gave no usable script. Writing it on-device from the teacher's sentences instead.");
+    }
+    if (!plan) {
+      stage("Writing the script from the teacher's sentences", 60);
+      plan = composeOffline(input, cfg.language);
+    }
+    if (!plan) throw new Error("Not enough of the lesson has been heard yet to write a script");
+    stage("Building scenes and timing the narration", 90);
+    return { title: plan.title, scenes: planToScenes(plan, cfg), provider, motif: plan.motif, notes: plan.notes };
   }
 
   // ---------- Background generation pipeline (Content agent + workers) ----------
 
-  private createContentTask(o: {
-    topicId: string; title: string; format: AssetFormat; brief: string; reason: string;
-    requestedBy: "agent" | "teacher"; scenes: () => Scene[] | Promise<Scene[]>;
-    objectives: { code: string; text: string }[]; revisionOf?: string; isFallbackFor?: string; fast?: boolean;
+  private createReelTask(o: {
+    topicId: string; reason: string; requestedBy: "agent" | "teacher"; objectives: { code: string; text: string }[];
+    title?: string; brief?: string; revisionOf?: string; job?: ReelJob;
   }) {
+    const job = o.job ?? {};
+    const cfg = this.state.settings.reel;
+    return this.createContentTask({
+      topicId: o.topicId, title: o.title ?? `Video: ${this.state.context.topic ?? "this lesson"}`, format: "animation",
+      brief: o.brief ?? `Narrated ${reelStyle(cfg.style).name} video, about ${cfg.lengthSec} seconds, written from the lesson transcript.`,
+      reason: o.reason, requestedBy: o.requestedBy, objectives: o.objectives, revisionOf: o.revisionOf,
+      write: (stage) => this.writeReel(job, stage), job,
+    });
+  }
+
+  private createContentTask(o: ContentTaskOptions) {
     const task: GenerationTask = {
       id: uid("task_"), kind: "content", title: o.title, format: o.format, reason: o.reason, brief: o.brief,
       topicId: o.topicId, status: "planned", stage: "Queued for background worker", progress: 0,
@@ -546,61 +608,52 @@ export class ClassroomEngine {
 
   private async runContentTask(
     id: string,
-    o: { topicId: string; title: string; format: AssetFormat; scenes: () => Scene[] | Promise<Scene[]>; objectives: { code: string; text: string }[]; isFallbackFor?: string; fast?: boolean },
+    o: ContentTaskOptions,
   ) {
     const failureMode = o.isFallbackFor ? "none" : this.state.settings.failureMode;
     if (failureMode !== "none") this.update((s) => void (s.settings.failureMode = "none"));
     const f = o.fast ? 0.35 : 1;
-    const stages: [string, number, number][] = o.fast
-      ? [["Composing simple diagram", 1500, 60], ["Rendering", 1200, 100]]
-      : [
-          ["Writing script & learning goal", 2000, 15],
-          ["Designing storyboard", 2200, 35],
-          ["Rendering animation frames", 3600, 75],
-          ["Synthesising narration", 1800, 100],
-        ];
     await sleep(600 * f);
     if (!this.taskAlive(id)) return;
     this.patchTask(id, { status: "generating" });
     this.log("Orchestrator", "info", `Background worker picked up "${o.title}". Teacher can continue teaching.`);
 
-    let scenes: Scene[] = [];
+    let result: ReelResult;
     try {
-      const scenesP = Promise.resolve(o.scenes());
-      for (const [stage, ms, pct] of stages) {
-        if (!this.taskAlive(id)) return;
-        this.patchTask(id, { stage });
-        const steps = 6;
-        const start = this.state.tasks.find((t) => t.id === id)?.progress ?? 0;
-        for (let i = 1; i <= steps; i++) {
-          await sleep(ms / steps);
-          if (!this.taskAlive(id)) return;
-          this.patchTask(id, { progress: Math.round(start + ((pct - start) * i) / steps) });
-          if (failureMode === "generation" && stage.startsWith("Rendering") && i === 3)
-            throw new Error("Video-generation provider timed out (HTTP 504) — simulated failure");
-        }
+      const stage = (name: string, progress: number) => {
+        if (this.taskAlive(id)) this.patchTask(id, { stage: name, progress });
+      };
+      if (failureMode === "generation") {
+        stage("Writing the script", 30);
+        await sleep(1500);
+        throw new Error("Script service timed out (HTTP 504) — simulated failure");
       }
-      scenes = await scenesP;
+      result = await o.write(stage);
     } catch (e) {
+      if (!this.taskAlive(id)) return;
       const msg = e instanceof Error ? e.message : String(e);
       this.patchTask(id, { status: "failed", error: msg, stage: "Failed" });
       this.log("Content", "error", `Generation failed: ${msg}`);
       this.log("Orchestrator", "decision", "Lesson continues uninterrupted. Falling back to a simpler visual; the teacher can retry the original animation.");
-      this.say("Heads up: the animation service is slow right now, so I've prepared a simpler diagram instead.", { wait: true });
+      this.say("Heads up: I couldn't finish that video, so I've prepared a simpler diagram instead.", { wait: true });
       this.createFallback(id, o.topicId);
       return;
     }
 
     if (!this.taskAlive(id)) return;
+    const title = o.job?.keepTitle ? o.title : result.title;
+    if (title !== o.title) this.patchTask(id, { title });
     const asset: GeneratedAsset = {
-      id: uid("asset_"), taskId: id, title: o.title, format: o.format, topicId: o.topicId,
-      objectives: o.objectives, scenes, createdAt: Date.now(), isFallback: Boolean(o.isFallbackFor),
-      provider: this.state.context.source === "llm" ? `LLM (${this.state.aiProvider.model})` : "On-device animation renderer",
+      id: uid("asset_"), taskId: id, title, format: o.format, topicId: o.topicId,
+      objectives: o.objectives, scenes: result.scenes, createdAt: Date.now(), isFallback: Boolean(o.isFallbackFor),
+      provider: result.provider,
+      reel: o.job ? { motif: result.motif, language: this.state.settings.reel.language, notes: result.notes } : undefined,
     };
+    if (result.notes) this.log("Content", "info", result.notes);
 
     // Validation
     this.patchTask(id, { status: "validating", stage: "Running automated checks", progress: 100 });
-    this.log("Validator", "info", `Running ${pendingChecks().length} automated checks on "${o.title}".`);
+    this.log("Validator", "info", `Running ${pendingChecks().length} automated checks on "${title}".`);
     const results = validateAsset(asset, this.state.context, this.state.curriculum, { forceFail: failureMode === "validation" });
     const shown: ValidationCheck[] = pendingChecks();
     for (let i = 0; i < results.length; i++) {
@@ -629,7 +682,7 @@ export class ClassroomEngine {
       s.assets.push(asset);
     });
     this.patchTask(id, { status: "ready", stage: "Ready — waiting for a natural pause", assetId: asset.id });
-    this.log("Validator", "success", `All required checks passed for "${o.title}".`);
+    this.log("Validator", "success", `All required checks passed for "${title}".`);
     this.queueForPresentation(asset.id);
   }
 
@@ -640,7 +693,8 @@ export class ClassroomEngine {
       : [{ title: this.state.context.topic ?? "Key idea", caption: this.state.context.summary.slice(-2).join(" "), narration: "Here is a short summary of the key idea.", visual: { kind: "emoji", emoji: ["📝"] }, durationMs: 10000 }];
     this.createContentTask({
       topicId, title: topic?.fallback.title ?? "Text summary", format: "diagram", brief: "Simple static diagram + text fallback.",
-      reason: "Fallback for failed/held content", requestedBy: "agent", scenes: () => fbScenes,
+      reason: "Fallback for failed/held content", requestedBy: "agent",
+      write: async () => ({ title: topic?.fallback.title ?? "Text summary", scenes: fbScenes, provider: "Built-in safe diagram" }),
       objectives: (topic?.curriculum ?? this.state.curriculum)?.objectives.slice(0, 2) ?? [], isFallbackFor: failedTaskId, fast: true,
     });
   }
@@ -670,55 +724,36 @@ export class ClassroomEngine {
     this.teacherAction("retry_task", id);
     this.log("Orchestrator", "info", `Retrying "${t.title}".`);
     if (t.kind === "quiz") return void this.prepareQuiz(5, "teacher");
-    this.createContentTask({
-      topicId: t.topicId, title: t.title, format: t.format as AssetFormat, brief: t.brief, reason: "Retry",
-      requestedBy: "teacher", revisionOf: id,
-      scenes: () => (topic ? (t.title === topic.animation.title ? topic.animation.scenes : this.findScenes(t.title, topic)) : this.llmStoryboard()),
+    this.createReelTask({
+      topicId: t.topicId, title: t.title, brief: t.brief, reason: "Retry", requestedBy: "teacher", revisionOf: id,
       objectives: (topic?.curriculum ?? this.state.curriculum)?.objectives.slice(0, 4) ?? [],
     });
   }
 
-  private findScenes(title: string, topic: TopicEntry): Scene[] {
-    const f = Object.values(topic.followUps).find((x) => x.title === title);
-    return f?.scenes ?? this.variantScenes(topic);
-  }
-
   requestRevision(assetId?: string) {
-    const topic = getTopic(this.state.context.topicId);
+    const topicId = this.state.context.topicId;
     this.teacherAction("request_revision", assetId);
-    if (!topic) {
-      if (this.state.aiProvider.llm && this.state.context.topicId) {
-        this.createContentTask({
-          topicId: this.state.context.topicId, title: `Storyboard (revised): ${this.state.context.topic}`, format: "storyboard",
-          brief: "Alternative storyboard", reason: "Teacher requested a revision", requestedBy: "teacher", scenes: () => this.llmStoryboard(),
-          objectives: this.state.curriculum?.objectives ?? [],
-        });
-      } else this.say("I need a clearer topic before I can make a different version.");
-      return;
-    }
-    this.log("Orchestrator", "decision", "Teacher requested a different version. Choosing a new format: real-life example storyboard.");
-    this.createContentTask({
-      topicId: topic.id, title: `${topic.topic}: everyday examples`, format: "storyboard",
-      brief: `Storyboard of everyday examples of ${topic.topic}.`, reason: "Teacher requested a revision", requestedBy: "teacher",
-      revisionOf: assetId, scenes: () => this.variantScenes(topic), objectives: topic.curriculum.objectives.slice(0, 4),
+    if (!topicId) return void this.say("I need a clearer topic before I can make a different version.");
+    this.log("Orchestrator", "decision", "Teacher requested a different version. Rewriting the script from the lesson with a fresh angle.");
+    this.createReelTask({
+      topicId, reason: "Teacher requested a different version", requestedBy: "teacher", revisionOf: assetId, job: { variant: true },
+      objectives: (getTopic(topicId)?.curriculum ?? this.state.curriculum)?.objectives.slice(0, 4) ?? [],
     });
   }
 
   generateAnimationNow() {
-    const topic = getTopic(this.state.context.topicId);
+    const topicId = this.state.context.topicId;
     this.teacherAction("request_animation");
-    if (!topic && !(this.state.context.source === "llm" && this.state.aiProvider.llm)) {
+    if (!topicId) {
       this.say("I'm not sure of the topic yet. Could you tell me a bit more about what we're learning first?");
       return;
     }
-    const hasMain = topic && this.state.tasks.some((t) => t.title === topic.animation.title && !["failed", "cancelled", "held"].includes(t.status));
-    if (topic && !hasMain) {
-      this.createContentTask({
-        topicId: topic.id, title: topic.animation.title, format: topic.animation.format, brief: topic.animation.brief,
-        reason: "Teacher requested an animation", requestedBy: "teacher", scenes: () => topic.animation.scenes,
-        objectives: topic.curriculum.objectives.slice(0, 4),
-      });
-    } else this.requestRevision();
+    const hasMain = this.state.tasks.some((t) => t.kind === "content" && t.topicId === topicId && !t.isFallbackFor && !["failed", "cancelled", "held"].includes(t.status));
+    if (hasMain) return this.requestRevision();
+    this.createReelTask({
+      topicId, reason: "Teacher requested a video", requestedBy: "teacher",
+      objectives: (getTopic(topicId)?.curriculum ?? this.state.curriculum)?.objectives.slice(0, 4) ?? [],
+    });
   }
 
   // ---------- Presentation (Classroom display) ----------
@@ -747,7 +782,9 @@ export class ClassroomEngine {
     const p = this.state.presentation;
     const a = this.state.assets.find((x) => x.id === p.assetId);
     const sc = a?.scenes[p.scene];
-    if (sc && this.state.settings.narration && this.state.settings.voiceOutput) this.speakNow(sc.narration, false);
+    if (!sc || !this.state.settings.narration || !this.state.settings.voiceOutput) return;
+    const voice = a?.reel ? { lang: reelLanguage(a.reel.language).speech, voice: this.state.settings.reel.voice } : undefined;
+    this.speakNow(sc.narration, false, voice);
   }
 
   pausePresentation() {
@@ -785,6 +822,8 @@ export class ClassroomEngine {
   dismiss(by: "teacher" | "agent" = "teacher") {
     const mode = this.state.presentation.mode;
     if (mode === "idle") return;
+    this.cancelReply();
+    if (by === "teacher") this.closeConversation();
     this.speaker.cancel();
     this.speechQueue = [];
     this.update((s) => {
@@ -816,18 +855,22 @@ export class ClassroomEngine {
   // ---------- Voice agent ----------
 
   /** Queue speech: waits for a pause so the AI never talks over the teacher. */
-  say(text: string, opts: { wait?: boolean } = {}) {
+  say(text: string, opts: { wait?: boolean; reply?: boolean } = {}) {
     this.update((s) => {
       s.transcript.push({ id: uid(), t: Date.now(), speaker: "ai", text });
       s.voice.last = text;
     });
     this.log("Voice", "info", `“${text}”`);
-    if (!this.state.settings.voiceOutput) return;
-    this.speechQueue.push({ text, immediate: !opts.wait });
+    if (opts.reply) this.addTurn("ai", text);
+    if (!this.state.settings.voiceOutput) {
+      if (opts.reply) this.openConversation();
+      return;
+    }
+    this.speechQueue.push({ text, immediate: !opts.wait, reply: opts.reply });
     this.update((s) => void (s.voice.queue = this.speechQueue.length));
   }
 
-  private speakNow(text: string, record = false) {
+  private speakNow(text: string, record = false, voice?: VoiceChoice, reply = false) {
     if (record) this.say(text);
     this.speaker.cancel();
     this.update((s) => void (s.voice.speaking = true));
@@ -837,11 +880,124 @@ export class ClassroomEngine {
       () => {
         this.speakingUntilIgnore = Date.now() + 700;
         this.update((s) => void (s.voice.speaking = false));
+        if (reply) this.openConversation();
       },
+      voice,
     );
   }
 
+  // ---------- Conversation (turn-taking with the teacher) ----------
+
+  private addTurn(role: "teacher" | "ai", text: string) {
+    this.update((s) => {
+      s.conversation.turns.push({ role, text });
+      s.conversation.turns.splice(0, Math.max(0, s.conversation.turns.length - CHAT_TURNS));
+    });
+  }
+
+  private openConversation() {
+    this.update((s) => void (s.conversation.listeningUntil = Date.now() + REPLY_WINDOW_MS));
+  }
+
+  private closeConversation() {
+    if (this.state.conversation.listeningUntil) this.update((s) => void (s.conversation.listeningUntil = 0));
+  }
+
+  /** Stops a reply wherever it is: still being written, or part-way through being spoken. */
+  private cancelReply() {
+    this.replyRun += 1;
+    this.replyAbort?.abort();
+    this.replyAbort = null;
+    this.replySentences = [];
+    this.replyStreamDone = false;
+    const active = this.replySpeaking || this.state.conversation.thinking;
+    this.replySpeaking = false;
+    if (!active) return;
+    this.speaker.cancel();
+    this.update((s) => {
+      s.conversation.thinking = false;
+      s.voice.speaking = false;
+    });
+  }
+
+  private replyVoice(): VoiceChoice | undefined {
+    const cfg = this.state.settings.reel;
+    return cfg.language === "en" ? undefined : { lang: reelLanguage(cfg.language).speech, voice: cfg.voice };
+  }
+
+  /** Speaks finished sentences one at a time, so a reply starts before it is fully written. */
+  private pumpReply(): void {
+    if (this.replySpeaking) return;
+    const next = this.replySentences.shift();
+    if (!next) {
+      if (this.replyStreamDone) {
+        this.replyStreamDone = false;
+        this.speakingUntilIgnore = Date.now() + 700;
+        this.update((s) => void (s.voice.speaking = false));
+        this.openConversation();
+      }
+      return;
+    }
+    if (!this.state.settings.voiceOutput) return this.pumpReply();
+    const run = this.replyRun;
+    this.replySpeaking = true;
+    this.speaker.speak(next, () => {}, () => {
+      if (run !== this.replyRun) return;
+      this.replySpeaking = false;
+      this.pumpReply();
+    }, this.replyVoice());
+  }
+
+  /** Returns false if no words arrived, so the caller can fall back. */
+  private async streamReply(question: string, history: ChatTurn[]): Promise<boolean> {
+    const ctx = this.state.context;
+    const run = this.replyRun;
+    const ctrl = new AbortController();
+    this.replyAbort = ctrl;
+    this.update((s) => void (s.conversation.thinking = true));
+    const segId = uid();
+    let shown = "";
+    let unspoken = "";
+
+    const onText = (chunk: string) => {
+      if (run !== this.replyRun) return;
+      const first = !shown;
+      shown += chunk;
+      unspoken += chunk;
+      this.update((s) => {
+        s.conversation.thinking = false;
+        s.voice.speaking = this.state.settings.voiceOutput;
+        s.voice.last = shown;
+        if (first) s.transcript.push({ id: segId, t: Date.now(), speaker: "ai", text: shown });
+        else {
+          const seg = s.transcript.find((x) => x.id === segId);
+          if (seg) seg.text = shown;
+        }
+      });
+      this.showExplanation("Answer", shown.trim(), "💬");
+      const SENTENCE = /^([\s\S]*?[.!?…])\s+/;
+      for (let m = unspoken.match(SENTENCE); m; m = unspoken.match(SENTENCE)) {
+        this.replySentences.push(m[1].trim());
+        unspoken = unspoken.slice(m[0].length);
+      }
+      this.pumpReply();
+    };
+
+    await llmStream("answer", { text: question, history, context: { subject: ctx.subject, topic: ctx.topic, level: ctx.level, concepts: ctx.concepts, summary: ctx.summary.slice(-4) } }, onText, ctrl.signal);
+    if (run !== this.replyRun) return true;
+    this.replyAbort = null;
+    this.update((s) => void (s.conversation.thinking = false));
+    if (!shown.trim()) return false;
+    if (unspoken.trim()) this.replySentences.push(unspoken.trim());
+    this.addTurn("ai", shown.trim());
+    this.log("Voice", "info", `“${shown.trim()}”`);
+    this.replyStreamDone = true;
+    this.pumpReply();
+    return true;
+  }
+
   stopSpeaking() {
+    this.cancelReply();
     this.speaker.cancel();
     this.speechQueue = [];
     this.update((s) => {
@@ -850,7 +1006,8 @@ export class ClassroomEngine {
     });
   }
 
-  private async handleIntent(intent: Intent) {
+  private async handleIntent(intent: Intent, raw: string) {
+    this.cancelReply(); // the teacher has moved on, even if the AI was mid-sentence
     const topic = getTopic(this.state.context.topicId);
     const ctx = this.state.context;
     this.teacherAction(`voice_${intent.type}`);
@@ -866,13 +1023,15 @@ export class ClassroomEngine {
         const ex = topic.everydayExamples[this.exampleIdx++ % topic.everydayExamples.length];
         this.log("Orchestrator", "decision", "Using current lesson context to give an everyday example; showing it on the display as well.");
         this.showExplanation("Everyday example", ex, topic.id.includes("sci") ? "🌿" : "📺");
-        this.say(`Sure. ${ex.replace(/²/g, " squared")}`);
+        this.addTurn("teacher", raw);
+        this.say(`Sure. ${ex.replace(/²/g, " squared")}`, { reply: true });
         return;
       }
       case "simpler":
         if (!topic) return this.answerQuestion("Explain this in simpler language.");
         this.showExplanation("In simpler words", topic.simpler, "🧩");
-        this.say(topic.simpler);
+        this.addTurn("teacher", raw);
+        this.say(topic.simpler, { reply: true });
         return;
       case "animation":
         this.say(intent.different ? "Sure, I'll make a different version in the background." : "Okay, I'll create an animation in the background. Keep going — I'll show it at a good moment.");
@@ -886,7 +1045,8 @@ export class ClassroomEngine {
           ? `So far we covered ${ctx.topic}: ${ctx.concepts.slice(0, 4).join("; ")}.`
           : "I haven't identified the topic yet.";
         this.showExplanation("Lesson summary", sum, "📝");
-        this.say(sum);
+        this.addTurn("teacher", raw);
+        this.say(sum, { reply: true });
         return;
       }
       case "question":
@@ -895,22 +1055,21 @@ export class ClassroomEngine {
   }
 
   private async answerQuestion(q: string) {
-    const ctx = this.state.context;
-    const topic = getTopic(ctx.topicId);
+    const topic = getTopic(this.state.context.topicId);
+    this.closeConversation();
+    if (this.state.presentation.mode === "content" && this.state.presentation.playing) this.pausePresentation();
+    const history = this.state.conversation.turns.slice();
+    this.addTurn("teacher", q);
     if (this.state.aiProvider.llm) {
-      this.log("Voice", "info", "Answering with the language model, grounded in the current lesson context.");
-      const a = await llmCall<string>("answer", { text: q, context: { subject: ctx.subject, topic: ctx.topic, level: ctx.level, concepts: ctx.concepts, summary: ctx.summary.slice(-4) } });
-      if (a) {
-        this.showExplanation("Answer", a, "💬");
-        return this.say(a);
-      }
+      this.log("Voice", "info", "Answering with the language model, grounded in the lesson and the conversation so far.");
+      if (await this.streamReply(q, history)) return;
+      this.log("Voice", "warning", "The language model did not reply. Using the on-device answer instead.");
     }
     if (topic) {
-      const a = `Good question. In short: ${topic.simpler}`;
       this.showExplanation("Answer", topic.simpler, "💬");
-      return this.say(a);
+      return this.say(`Good question. In short: ${topic.simpler}`, { reply: true });
     }
-    this.say("I'm not certain about that yet, and I don't want to guess. Could you rephrase, or tell me a little more about the topic?");
+    this.say("I'm not certain about that yet, and I don't want to guess. Could you rephrase, or tell me a little more about the topic?", { reply: true });
   }
 
   // ---------- Quiz & assessment ----------
@@ -1078,9 +1237,10 @@ export class ClassroomEngine {
     if (this.state.tasks.some((t) => t.title === fu.title && !["failed", "cancelled"].includes(t.status))) return;
     if (!auto) this.teacherAction("generate_follow_up");
     this.log("Orchestrator", "decision", `Generating follow-up content targeted at "${ins.followUp.conceptKey}" based on response evidence (not assumptions).`);
-    this.createContentTask({
-      topicId: topic.id, title: fu.title, format: "animation", brief: fu.explanation, reason: `Quiz evidence: low correct rate on ${ins.followUp.conceptKey}`,
-      requestedBy: auto ? "agent" : "teacher", scenes: () => fu.scenes, objectives: topic.curriculum.objectives.slice(0, 1),
+    this.createReelTask({
+      topicId: topic.id, title: fu.title, brief: fu.explanation, reason: `Quiz evidence: low correct rate on ${ins.followUp.conceptKey}`,
+      requestedBy: auto ? "agent" : "teacher", objectives: topic.curriculum.objectives.slice(0, 1),
+      job: { focus: fu.explanation, keepTitle: true },
     });
   }
 
@@ -1152,14 +1312,17 @@ export class ClassroomEngine {
       if (head.immediate ? silentFor > 600 : silentFor > 1200) {
         this.speechQueue.shift();
         this.update((st) => void (st.voice.queue = this.speechQueue.length));
-        this.speakNow(head.text);
+        this.speakNow(head.text, false, undefined, head.reply);
       }
     }
+
+    if (s.conversation.listeningUntil && now >= s.conversation.listeningUntil) this.closeConversation();
+    const chatting = s.conversation.thinking || now < s.conversation.listeningUntil;
 
     // Natural-pause presentation.
     const waiting = s.presentation.waitingAssetId;
     if (
-      waiting && s.settings.autoPresent && s.presentation.mode === "idle" && !s.voice.speaking && this.speechQueue.length === 0 &&
+      waiting && !chatting && s.settings.autoPresent && s.presentation.mode === "idle" && !s.voice.speaking && this.speechQueue.length === 0 &&
       silentFor >= s.settings.pauseThresholdMs && !this.demoTyping && !s.interim
     ) {
       this.update((st) => void (st.presentation.waitingAssetId = undefined));
@@ -1186,7 +1349,7 @@ export class ClassroomEngine {
         }
       }
     }
-    if (p.mode === "explanation" && !s.voice.speaking && this.speechQueue.length === 0 && now - p.sceneStartedAt > 9000) {
+    if (p.mode === "explanation" && !chatting && !s.voice.speaking && this.speechQueue.length === 0 && now - p.sceneStartedAt > 9000) {
       this.dismiss("agent");
     }
   }

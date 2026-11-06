@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./reel.css";
 
 export const metadata: Metadata = {
   title: "Agentic AI Smart Classroom",

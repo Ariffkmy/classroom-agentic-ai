@@ -9,6 +9,7 @@ import PipelinePanel from "@/components/teacher/PipelinePanel";
 import PresentationPanel from "@/components/teacher/PresentationPanel";
 import AgentLog from "@/components/teacher/AgentLog";
 import SettingsPanel from "@/components/teacher/SettingsPanel";
+import StylePanel from "@/components/teacher/StylePanel";
 import QuizPanel from "@/components/teacher/QuizPanel";
 import LessonSummary from "@/components/teacher/LessonSummary";
 
@@ -58,8 +59,9 @@ export default function TeacherPage() {
           <ContextPanel state={state} engine={engine} />
           <div className="flex max-h-[720px] min-h-[260px] flex-col"><PipelinePanel state={state} engine={engine} /></div>
         </div>
-        <div className="flex flex-col gap-4 xl:h-[calc(100vh-90px)] xl:sticky xl:top-[70px]">
-          <div className="flex min-h-[360px] flex-1 flex-col xl:min-h-0"><AgentLog state={state} /></div>
+        <div className="flex flex-col gap-4">
+          <div className="flex h-[360px] flex-col"><AgentLog state={state} /></div>
+          <StylePanel state={state} engine={engine} />
           <SettingsPanel state={state} engine={engine} />
         </div>
       </main>

@@ -82,8 +82,17 @@ export default function PipelinePanel({ state, engine }: { state: ClassroomState
               <details className="mt-2 text-xs text-slate-400">
                 <summary className="cursor-pointer select-none text-slate-500 hover:text-slate-300">Content brief</summary>
                 <p className="mt-1">{t.brief}</p>
-                {asset && <p className="mt-1 text-slate-500">Asset: {asset.scenes.length} scenes · provider: {asset.provider}</p>}
+                {asset && <p className="mt-1 text-slate-500">Asset: {asset.scenes.length} scenes · written by: {asset.provider}</p>}
               </details>
+
+              {asset?.reel && (
+                <details className="mt-2 text-xs text-slate-400">
+                  <summary className="cursor-pointer select-none text-slate-500 hover:text-slate-300">Script (written from the lesson, read-only)</summary>
+                  <ol className="mt-1 list-decimal space-y-1 pl-4">
+                    {asset.scenes.map((sc, i) => <li key={i}>{sc.narration}</li>)}
+                  </ol>
+                </details>
+              )}
 
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {running && <button className="btn btn-ghost !py-1 !text-xs" onClick={() => engine.cancelTask(t.id)}>Cancel</button>}
@@ -94,7 +103,7 @@ export default function PipelinePanel({ state, engine }: { state: ClassroomState
                   </button>
                 )}
                 {asset && t.kind === "content" && !t.isFallbackFor && t.status !== "held" && (
-                  <button className="btn btn-ghost !py-1 !text-xs" onClick={() => engine.requestRevision(asset.id)}>✎ Request revision</button>
+                  <button className="btn btn-ghost !py-1 !text-xs" onClick={() => engine.requestRevision(asset.id)}>↻ Make a different version</button>
                 )}
                 {t.kind === "quiz" && t.quizId && t.status === "ready" && (
                   <button className="btn btn-primary !py-1 !text-xs" onClick={() => engine.openQuiz(t.quizId!)}>▶ Start quiz</button>

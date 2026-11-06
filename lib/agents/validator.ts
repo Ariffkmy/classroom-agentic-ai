@@ -94,7 +94,7 @@ export function validateAsset(
   checks.push({
     name: CHECK_NAMES[5],
     status: okScenes && total <= 120 ? "pass" : "fail",
-    detail: `${asset.scenes.length} scenes rendered · ${total.toFixed(0)} s runtime`,
+    detail: `${asset.scenes.length} scenes built · ${total.toFixed(0)} s runtime`,
   });
 
   return checks;
