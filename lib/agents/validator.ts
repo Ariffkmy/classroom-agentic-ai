@@ -3,6 +3,7 @@
 
 import type { CurriculumRef, GeneratedAsset, LessonContext, Quiz, ValidationCheck } from "../types";
 import { getTopic } from "../curriculum";
+import { checkMaths, checkTriangles, sceneText } from "./accuracy";
 
 const BLOCKLIST = /\b(kill|blood|gun|weapon|stupid|dumb|hate|sexy|drugs?|alcohol|gambl\w*)\b/i;
 const PII = /\b(\d{6}-\d{2}-\d{4}|\+?6?01\d[- ]?\d{7,8}|[\w.]+@[\w.]+\.\w+)\b/; // MyKad / MY phone / email
@@ -14,7 +15,11 @@ export const CHECK_NAMES = [
   "Educational quality",
   "Safety & bias",
   "Technical integrity",
+  "Accuracy",
 ] as const;
+
+export const ACCURACY_CHECK = CHECK_NAMES[6];
+export const isUnsafe = (text: string) => BLOCKLIST.test(text) || PII.test(text);
 
 export function pendingChecks(): ValidationCheck[] {
   return CHECK_NAMES.map((name) => ({ name, status: "pending" }));
@@ -30,7 +35,7 @@ export function validateAsset(
   asset: GeneratedAsset,
   ctx: LessonContext,
   curriculum: CurriculumRef | null,
-  opts: { forceFail?: boolean } = {},
+  opts: { forceFail?: boolean; accuracy?: ValidationCheck } = {},
 ): ValidationCheck[] {
   const text = asset.scenes.map((s) => `${s.title} ${s.caption} ${s.narration} ${s.formula ?? ""}`).join(" ").toLowerCase();
   const topic = getTopic(asset.topicId);
@@ -97,10 +102,18 @@ export function validateAsset(
     detail: `${asset.scenes.length} scenes built · ${total.toFixed(0)} s runtime`,
   });
 
+  // 7. Accuracy: the engine passes in the model review; arithmetic alone is the fallback.
+  const wrong = [...checkTriangles(asset.scenes), ...checkMaths(sceneText(asset.scenes))];
+  checks.push(opts.accuracy ?? {
+    name: CHECK_NAMES[6],
+    status: wrong.length ? "fail" : "warn",
+    detail: wrong.length ? wrong.join(" ") : "Arithmetic re-checked. Facts were not reviewed by a model.",
+  });
+
   return checks;
 }
 
-export function validateQuiz(quiz: Quiz): ValidationCheck[] {
+export function validateQuiz(quiz: Quiz, accuracy?: ValidationCheck): ValidationCheck[] {
   const qs = quiz.questions;
   const wellFormed = qs.every((q) => q.options.length >= 2 && q.answer >= 0 && q.answer < q.options.length);
   const uniqueOpts = qs.every((q) => new Set(q.options).size === q.options.length);
@@ -110,6 +123,7 @@ export function validateQuiz(quiz: Quiz): ValidationCheck[] {
     { name: "Distinct options", status: uniqueOpts ? "pass" : "fail" },
     { name: "Objective coverage", status: qs.some((q) => q.objective) ? "pass" : "warn", detail: [...new Set(qs.map((q) => q.objective).filter(Boolean))].join(", ") || "AI-inferred" },
     { name: "Safety & bias", status: safe ? "pass" : "fail" },
+    ...(accuracy ? [accuracy] : []),
   ];
 }
 

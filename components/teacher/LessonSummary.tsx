@@ -1,11 +1,13 @@
 "use client";
 import type { ClassroomState } from "@/lib/types";
 import type { ClassroomEngine } from "@/lib/engine";
+import { ACTION_LABEL, firstRate, latestRate } from "@/lib/agent/brain";
 
 export default function LessonSummary({ state, engine, onClose }: { state: ClassroomState; engine: ClassroomEngine; onClose: () => void }) {
   const mins = state.lesson.startedAt && state.lesson.endedAt ? Math.max(1, Math.round((state.lesson.endedAt - state.lesson.startedAt) / 60000)) : 0;
   const presented = state.assets.filter((a) => a.presentedAt);
   const ins = state.insights;
+  const acted = state.agent.decisions.filter((d) => d.action !== "wait" && d.status !== "blocked");
 
   const exportJson = () => {
     // Data minimisation: no raw audio, no student names — only summaries & aggregates.
@@ -16,6 +18,8 @@ export default function LessonSummary({ state, engine, onClose }: { state: Class
       summary: state.context.summary,
       generatedContent: state.assets.map((a) => ({ id: a.id, title: a.title, format: a.format, objectives: a.objectives.map((o) => o.code), validation: a.validation, presentedAt: a.presentedAt })),
       assessment: ins && { overallRate: ins.overallRate, sampleSize: ins.sampleSize, stats: ins.stats.map(({ questionId, correct, responses }) => ({ questionId, correct, responses })), weakConcepts: ins.weakConcepts },
+      understanding: state.agent.evidence,
+      agentDecisions: state.agent.decisions.map(({ t, trigger, action, focus, reason, expected, source, status, outcome, reflection }) => ({ t, trigger, action, focus, reason, expected, source, status, outcome, reflection })),
       teacherActions: state.teacherActions,
       retention: "Raw audio never stored. Transcript discarded; summary retained for this session only.",
     };
@@ -45,6 +49,27 @@ export default function LessonSummary({ state, engine, onClose }: { state: Class
         </div>
         <h3 className="mt-5 text-sm font-semibold text-slate-200">Rolling summary</h3>
         <ul className="mt-1 space-y-1 text-sm text-slate-300">{state.context.summary.map((s, i) => <li key={i}>• {s}</li>)}</ul>
+        {state.agent.evidence.length > 0 && (
+          <>
+            <h3 className="mt-4 text-sm font-semibold text-slate-200">Understanding by concept</h3>
+            <ul className="mt-1 space-y-1 text-sm text-slate-300">
+              {state.agent.evidence.map((e) => (
+                <li key={e.concept}>
+                  • {e.concept.replace(/-/g, " ")}: {e.attempts.length > 1 ? `${Math.round(firstRate(e) * 100)}% → ${Math.round(latestRate(e) * 100)}%` : `${Math.round(latestRate(e) * 100)}%`} <span className="text-slate-500">({e.attempts.length} {e.attempts.length === 1 ? "check" : "checks"})</span>
+                </li>
+              ))}
+            </ul>
+            <p className="mt-1 text-xs text-slate-500">Group answers from this lesson. A guide for the teacher, not a controlled measure of learning.</p>
+          </>
+        )}
+        {acted.length > 0 && (
+          <>
+            <h3 className="mt-4 text-sm font-semibold text-slate-200">What the agent did</h3>
+            <ul className="mt-1 space-y-1 text-sm text-slate-300">
+              {acted.map((d) => <li key={d.id}>• {ACTION_LABEL[d.action]}: {d.outcome ?? d.reason}</li>)}
+            </ul>
+          </>
+        )}
         {state.curriculum && (
           <>
             <h3 className="mt-4 text-sm font-semibold text-slate-200">Learning standards addressed</h3>

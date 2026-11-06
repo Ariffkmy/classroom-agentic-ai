@@ -5,7 +5,7 @@ const STEPS = [
   ["🗣 Teach naturally", "Speak into the mic — or press “Run” on the Pythagoras demo voice."],
   ["🧠 AI discovers context", "Subject, topic, concepts and KSSM learning standards appear on their own."],
   ["🎬 AI decides & generates", "It plans a ladder-and-wall animation and renders it in the background while you keep teaching."],
-  ["✅ Auto-validated", "Six automated checks run. Only content that passes is shown — at a natural pause."],
+  ["✅ Auto-validated", "Seven automated checks run, including a maths and fact check. Only content that passes is shown — at a natural pause."],
   ["📝 Quiz & group answers", "“Hey assistant, prepare five questions.” Groups hold up answer cards; teacher taps them in."],
   ["📊 Insights & follow-up", "Class-level analysis flags the tricky concept and auto-creates a follow-up animation."],
 ];

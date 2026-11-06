@@ -56,7 +56,7 @@ export function analyse(quiz: Quiz, session: QuizSession): Insights {
 
   return {
     quizId: quiz.id, sampleSize, overallRate, stats, weakConcepts, recommendation, caveat,
-    followUp: follow && top ? { title: follow.title, conceptKey: top } : undefined,
+    followUp: top ? { title: follow?.title ?? top.replace(/-/g, " ").replace(/^./, (c) => c.toUpperCase()), conceptKey: top } : undefined,
     generatedAt: Date.now(),
   };
 }

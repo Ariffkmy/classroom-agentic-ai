@@ -42,6 +42,8 @@ export interface CurriculumRef {
   objectives: LearningObjective[];
   source: string;
   verified: boolean; // false = AI-inferred / unverified
+  url?: string; // the official document
+  next?: string[]; // what follows in the syllabus
 }
 
 // ---------- Visual content (storyboards / animations) ----------
@@ -119,9 +121,9 @@ export interface ValidationCheck {
 
 export interface GenerationTask {
   id: string;
-  kind: "content" | "quiz";
+  kind: "content" | "quiz" | "challenge";
   title: string;
-  format: AssetFormat | "quiz";
+  format: AssetFormat | "quiz" | "challenge";
   reason: string;
   brief: string;
   topicId: string;
@@ -134,6 +136,8 @@ export interface GenerationTask {
   error?: string;
   assetId?: string;
   quizId?: string;
+  challengeId?: string;
+  focus?: string; // what the agent asked this video to concentrate on
   requestedBy: "agent" | "teacher";
   revisionOf?: string;
   isFallbackFor?: string;
@@ -158,6 +162,97 @@ export interface Quiz {
   questions: QuizQuestion[];
   createdAt: number;
   validated: boolean;
+  source?: "lesson" | "dataset"; // lesson = written from what the teacher said
+  usedAt?: number;
+}
+
+// ---------- Class Challenge: a story problem groups solve together ----------
+
+export interface ChallengeQuestion {
+  question: string;
+  options: string[];
+  answer: number;
+}
+
+export interface ChallengeStep extends ChallengeQuestion {
+  id: string;
+  concept: string;
+  situation: string;
+  right: string; // shown when most groups got it
+  wrong: string; // explains the likely mistake
+  support?: ChallengeQuestion; // an easier try, used only if most groups missed the step
+}
+
+export interface Challenge {
+  id: string;
+  topicId: string;
+  title: string;
+  story: string;
+  steps: ChallengeStep[];
+  createdAt: number;
+  source: "lesson" | "quiz";
+}
+
+export interface ChallengeSession {
+  challengeId: string;
+  groups: string[];
+  step: number;
+  phase: "answering" | "reveal" | "support" | "supportReveal" | "done";
+  responses: Record<string, number | null>; // group -> option, for the question on screen
+  lastRate: number;
+  results: { stepId: string; concept: string; rate: number; supportRate?: number }[];
+}
+
+// ---------- The lesson agent ----------
+
+export type AgentAction = "wait" | "make_video" | "prepare_quiz" | "start_quiz" | "start_challenge" | "reexplain" | "advise_teacher";
+export type AgentTrigger = "teaching" | "content_finished" | "quiz_results" | "challenge_finished";
+
+export interface AgentDecision {
+  id: string;
+  t: number;
+  trigger: AgentTrigger;
+  action: AgentAction;
+  focus?: string;
+  say?: string;
+  reason: string;
+  expected?: string;
+  source: "model" | "rules"; // who decided: the language model, or the offline rules
+  status: "running" | "done" | "blocked" | "failed" | "skipped";
+  outcome?: string;
+  reflection?: string; // the agent's own judgement of this action, made at its next decision
+}
+
+export interface ConceptEvidence {
+  concept: string;
+  attempts: { t: number; kind: "quiz" | "challenge"; rate: number; groups: number }[];
+}
+
+export type AgentPlan =
+  | { kind: "quiz"; id: string; decisionId: string; label: string }
+  | { kind: "challenge"; id: string; decisionId: string; label: string }
+  | { kind: "explain"; title: string; body: string; decisionId: string; label: string };
+
+export interface PlanStep {
+  text: string;
+  status: "todo" | "doing" | "done" | "dropped";
+}
+
+export interface LessonPlan {
+  steps: PlanStep[];
+  changes: { t: number; why: string }[]; // why the agent changed course
+  updatedAt: number;
+}
+
+export interface AgentState {
+  thinking: boolean;
+  lessonPlan?: LessonPlan;
+  snoozedUntil?: number; // the teacher said "later"
+  decisions: AgentDecision[];
+  evidence: ConceptEvidence[];
+  plan?: AgentPlan; // ready, waiting for a natural pause
+  advice?: string; // for the teacher only, never shown to the class
+  modelDecisions: number;
 }
 
 export interface QuizSession {
@@ -166,6 +261,7 @@ export interface QuizSession {
   current: number; // current question index shown on display
   responses: Record<string, Record<string, number | null>>; // questionId -> group -> option
   phase: "answering" | "results";
+  revealed?: string[]; // questions whose answer has been shown on the display
 }
 
 export interface QuestionStat {
@@ -206,10 +302,10 @@ export interface LessonContext {
   summary: string[];
   scores: Record<string, number>;
   topicHistory: { t: number; topic: string }[];
-  source: "dataset" | "llm" | "none";
+  source: "dataset" | "llm" | "syllabus" | "none";
 }
 
-export type PresentationMode = "idle" | "content" | "quiz" | "results" | "explanation";
+export type PresentationMode = "idle" | "content" | "quiz" | "results" | "explanation" | "challenge";
 
 export interface Presentation {
   mode: PresentationMode;
@@ -234,10 +330,15 @@ export interface ReelConfig {
   voice: string; // browser voice name; "" = pick automatically for the language
 }
 
+export type Patience = "quick" | "normal" | "patient";
+
 export interface Settings {
   reel: ReelConfig;
   autoGenerate: boolean;
   autoPresent: boolean;
+  askFirst: boolean; // nothing reaches the class until the teacher says so
+  classYear: number | null; // Tahun 1 to 6, or null to work it out from the lesson
+  patience: Patience;
   voiceOutput: boolean;
   narration: boolean;
   failureMode: "none" | "generation" | "validation";
@@ -276,6 +377,9 @@ export interface ClassroomState {
   quizzes: Quiz[];
   quizSession: QuizSession | null;
   insights: Insights | null;
+  challenges: Challenge[];
+  challengeSession: ChallengeSession | null;
+  agent: AgentState;
   presentation: Presentation;
   log: LogEntry[];
   settings: Settings;

@@ -1,4 +1,5 @@
 "use client";
+import { useEffect, useRef } from "react";
 import type { ClassroomState } from "@/lib/types";
 import type { ClassroomEngine } from "@/lib/engine";
 
@@ -6,6 +7,9 @@ const L = ["A", "B", "C", "D", "E"];
 
 export default function QuizPanel({ state, engine }: { state: ClassroomState; engine: ClassroomEngine }) {
   const ss = state.quizSession;
+  const panel = useRef<HTMLElement>(null);
+  // A quiz can start by itself, and it waits for answers here, so bring this into view.
+  useEffect(() => panel.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), [ss?.quizId]);
   const quiz = state.quizzes.find((q) => q.id === ss?.quizId);
   if (!ss || !quiz) return null;
   const q = quiz.questions[ss.current];
@@ -14,7 +18,7 @@ export default function QuizPanel({ state, engine }: { state: ClassroomState; en
   const filled = quiz.questions.reduce((a, qq) => a + Object.values(ss.responses[qq.id]).filter((v) => v !== null).length, 0);
 
   return (
-    <section className="card" aria-label="Quiz and class insights">
+    <section ref={panel} className="card" aria-label="Quiz and class insights">
       <div className="card-h">
         <span>📝 Quiz & class insights — {quiz.title}</span>
         <span className="text-xs font-normal text-slate-400">Response method: teacher-entered group answer cards · no student devices · anonymous groups</span>
@@ -22,6 +26,9 @@ export default function QuizPanel({ state, engine }: { state: ClassroomState; en
 
       {ss.phase === "answering" && (
         <div className="p-4">
+          <p className="mb-3 rounded-lg bg-indigo-500/10 p-2 text-xs text-indigo-100 ring-1 ring-indigo-400/30">
+            🎙 Waiting for group answers. Tap them below, or say “everyone B” or “group A, C”. Then say “is that correct?”, “next question” or “show results”.
+          </p>
           <div className="flex flex-wrap items-center gap-1.5">
             {quiz.questions.map((qq, i) => {
               const n = Object.values(ss.responses[qq.id]).filter((v) => v !== null).length;

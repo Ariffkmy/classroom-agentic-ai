@@ -8,6 +8,8 @@ import ContextPanel from "@/components/teacher/ContextPanel";
 import PipelinePanel from "@/components/teacher/PipelinePanel";
 import PresentationPanel from "@/components/teacher/PresentationPanel";
 import AgentLog from "@/components/teacher/AgentLog";
+import AgentPanel from "@/components/teacher/AgentPanel";
+import ChallengePanel from "@/components/teacher/ChallengePanel";
 import SettingsPanel from "@/components/teacher/SettingsPanel";
 import StylePanel from "@/components/teacher/StylePanel";
 import QuizPanel from "@/components/teacher/QuizPanel";
@@ -55,12 +57,14 @@ export default function TeacherPage() {
         </div>
         <div className="flex min-w-0 flex-col gap-4">
           <PresentationPanel state={state} engine={engine} />
+          {state.challengeSession && <ChallengePanel state={state} engine={engine} />}
           {state.quizSession && <QuizPanel state={state} engine={engine} />}
           <ContextPanel state={state} engine={engine} />
           <div className="flex max-h-[720px] min-h-[260px] flex-col"><PipelinePanel state={state} engine={engine} /></div>
         </div>
         <div className="flex flex-col gap-4">
-          <div className="flex h-[360px] flex-col"><AgentLog state={state} /></div>
+          <div className="flex max-h-[560px] min-h-[220px] flex-col"><AgentPanel state={state} engine={engine} /></div>
+          <div className="flex h-[300px] flex-col"><AgentLog state={state} /></div>
           <StylePanel state={state} engine={engine} />
           <SettingsPanel state={state} engine={engine} />
         </div>

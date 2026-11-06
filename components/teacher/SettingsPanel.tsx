@@ -1,6 +1,7 @@
 "use client";
-import type { ClassroomState } from "@/lib/types";
+import type { ClassroomState, Patience } from "@/lib/types";
 import type { ClassroomEngine } from "@/lib/engine";
+import { PATIENCE } from "@/lib/agent/brain";
 import { Toggle } from "./ui";
 
 export default function SettingsPanel({ state, engine }: { state: ClassroomState; engine: ClassroomEngine }) {
@@ -11,6 +12,32 @@ export default function SettingsPanel({ state, engine }: { state: ClassroomState
       <div className="divide-y divide-slate-800 px-4 py-1">
         <Toggle label="Autonomous generation" desc="AI decides when to create content" checked={s.autoGenerate} onChange={(v) => engine.updateSettings({ autoGenerate: v })} />
         <Toggle label="Automatic presentation" desc="Show checked content at a natural pause" checked={s.autoPresent} onChange={(v) => engine.updateSettings({ autoPresent: v })} />
+        <div className="py-2">
+          <label className="text-sm font-medium text-slate-200" htmlFor="class-year">Class</label>
+          <span className="block text-xs text-slate-400">Helps match the lesson to the right DSKP standards</span>
+          <select
+            id="class-year"
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+            value={s.classYear ?? ""}
+            onChange={(e) => engine.updateSettings({ classYear: e.target.value ? Number(e.target.value) : null })}
+          >
+            <option value="">Work it out from the lesson</option>
+            {[1, 2, 3, 4, 5, 6].map((y) => <option key={y} value={y}>Tahun {y}</option>)}
+          </select>
+        </div>
+        <Toggle label="Ask me first" desc="Prepared content waits for your word. Turn off to let the AI choose the moment" checked={s.askFirst} onChange={(v) => engine.updateSettings({ askFirst: v })} />
+        <div className="py-2">
+          <label className="text-sm font-medium text-slate-200" htmlFor="patience">AI patience</label>
+          <span className="block text-xs text-slate-400">Used when Ask me first is off. Questions to the class get extra thinking time</span>
+          <select
+            id="patience"
+            className="mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm"
+            value={s.patience}
+            onChange={(e) => engine.updateSettings({ patience: e.target.value as Patience })}
+          >
+            {Object.entries(PATIENCE).map(([id, p]) => <option key={id} value={id}>{p.label}</option>)}
+          </select>
+        </div>
         <Toggle label="AI voice responses" checked={s.voiceOutput} onChange={(v) => engine.updateSettings({ voiceOutput: v })} />
         <Toggle label="Narrate presentations" checked={s.narration} onChange={(v) => engine.updateSettings({ narration: v })} />
         <div className="py-2">

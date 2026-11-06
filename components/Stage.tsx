@@ -7,6 +7,7 @@ import type { ClassroomState } from "@/lib/types";
 import SceneVisual from "./visuals/SceneVisual";
 import ReelScene from "./visuals/ReelScene";
 import { DISCUSS_LABEL } from "@/lib/reel/styles";
+import { PASS_RATE } from "@/lib/agent/brain";
 
 const LETTERS = ["A", "B", "C", "D", "E"];
 const OPTION_COLORS = ["bg-sky-600", "bg-violet-600", "bg-amber-600", "bg-emerald-600"];
@@ -42,6 +43,7 @@ export default function Stage({ state }: { state: ClassroomState }) {
       {p.mode === "explanation" && p.explanation && <ExplanationView {...p.explanation} />}
       {p.mode === "quiz" && <QuizView state={state} />}
       {p.mode === "results" && <ResultsView state={state} />}
+      {p.mode === "challenge" && <ChallengeView state={state} />}
       <PrivacyBar state={state} />
     </div>
   );
@@ -180,13 +182,60 @@ function QuizView({ state }: { state: ClassroomState }) {
       <div key={q.id} className="fade-up mt-6 text-[46px] font-extrabold leading-tight">{q.prompt}</div>
       <div className="mt-10 grid flex-1 grid-cols-2 gap-6">
         {q.options.map((o, i) => (
-          <div key={i} className={`flex items-center gap-6 rounded-3xl ${OPTION_COLORS[i % 4]} px-8 text-[34px] font-bold shadow-xl`}>
+          <div key={i} className={`flex items-center gap-6 rounded-3xl ${OPTION_COLORS[i % 4]} px-8 text-[34px] font-bold shadow-xl transition ${ss.revealed?.includes(q.id) && i !== q.answer ? "opacity-30" : ""}`}>
             <span className="flex h-20 w-20 shrink-0 items-center justify-center rounded-2xl bg-black/25 text-[44px]">{LETTERS[i]}</span>
             {o}
           </div>
         ))}
       </div>
       <div className="mt-6 text-center text-[24px] text-slate-200">Discuss in your group, then hold up your answer card (A, B, C or D)</div>
+    </div>
+  );
+}
+
+function ChallengeView({ state }: { state: ClassroomState }) {
+  const ss = state.challengeSession;
+  const c = state.challenges.find((x) => x.id === ss?.challengeId);
+  if (!ss || !c) return null;
+  const step = c.steps[ss.step];
+  if (ss.phase === "done") {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-6 px-24 pb-14 text-center">
+        <span className="text-8xl">🏁</span>
+        <div className="text-[52px] font-extrabold leading-tight">{c.title}</div>
+        <div className="text-[30px] text-indigo-200">Challenge complete. Well done, everyone!</div>
+      </div>
+    );
+  }
+  const easier = ss.phase === "support" || ss.phase === "supportReveal";
+  const q = easier && step.support ? step.support : step;
+  const prompt = easier ? step.support?.question : step.question;
+  const revealed = ss.phase === "reveal" || ss.phase === "supportReveal";
+  const answered = Object.values(ss.responses).filter((v) => v !== null).length;
+  const passed = ss.lastRate >= PASS_RATE;
+  return (
+    <div className="flex h-full flex-col px-14 pb-14 pt-8">
+      <div className="flex items-center justify-between text-[20px] text-indigo-200">
+        <span className="font-semibold uppercase tracking-widest">{c.title} · Step {ss.step + 1} of {c.steps.length}{easier ? " · Easier try" : ""}</span>
+        {!revealed && <span className="rounded-full bg-white/10 px-5 py-1.5">🪧 Groups answered: {answered}/{ss.groups.length}</span>}
+      </div>
+      {!easier && <div key={step.id} className="fade-up mt-4 text-[26px] leading-snug text-slate-200">{step.situation}</div>}
+      <div key={`${step.id}-${ss.phase}`} className="fade-up mt-3 text-[38px] font-extrabold leading-tight">{prompt}</div>
+      <div className="mt-5 grid min-h-0 flex-1 grid-cols-2 gap-4">
+        {q.options.map((o, i) => (
+          <div key={i} className={`flex items-center gap-5 rounded-3xl px-6 text-[28px] font-bold shadow-xl transition ${OPTION_COLORS[i % 4]} ${revealed && i !== q.answer ? "opacity-30" : ""}`}>
+            <span className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-black/25 text-[36px]">{LETTERS[i]}</span>
+            {o}
+          </div>
+        ))}
+      </div>
+      {revealed ? (
+        <div className={`pop mt-4 rounded-2xl p-4 text-[24px] leading-snug ring-1 ${passed ? "bg-emerald-500/15 ring-emerald-400/40" : "bg-amber-500/15 ring-amber-400/40"}`}>
+          {passed ? (easier ? "Good. That's the idea." : step.right) : step.wrong}
+        </div>
+      ) : (
+        <div className="mt-4 text-center text-[22px] text-slate-200">Talk it through in your group, then hold up your answer card</div>
+      )}
     </div>
   );
 }

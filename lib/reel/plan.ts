@@ -25,7 +25,8 @@ export interface ReelInput {
   keywords: string[];
   objectives: string[];
   sentences: string[]; // what the teacher actually said, oldest first
-  focus?: string; // quiz evidence: the idea to re-teach
+  focus?: string; // what the agent wants this video to concentrate on
+  fix?: string[]; // errors found in the last draft
   variant?: boolean; // teacher asked for a different version
   style: { name: string; brief: string };
   language: { label: string; rules: string };

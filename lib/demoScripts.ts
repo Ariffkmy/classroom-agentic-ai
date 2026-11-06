@@ -1,7 +1,25 @@
 // Scripted teacher speech for reliable stage demos (judges can also speak live).
+import type { ReelLanguageId } from "./types";
+
 export interface DemoLine { text: string; pauseAfterMs: number }
 
-export const DEMO_SCRIPTS: Record<string, { label: string; lines: DemoLine[] }> = {
+export const DEMO_SCRIPTS: Record<string, { label: string; lines: DemoLine[]; language?: ReelLanguageId; year?: number }> = {
+  pecahan: {
+    label: "Matematik Tahun 5 — Mendarab pecahan (DSKP 2.1.1)",
+    language: "ms-formal",
+    year: 5,
+    lines: [
+      { text: "Selamat pagi murid-murid Tahun 5. Sila buka buku teks dan lihat papan putih.", pauseAfterMs: 3500 },
+      { text: "Hari ini kita belajar tentang pecahan, iaitu cara mendarab pecahan dengan nombor bulat.", pauseAfterMs: 4000 },
+      { text: "Pecahan wajar ialah pecahan yang pengangkanya lebih kecil daripada penyebutnya, contohnya dua per tiga.", pauseAfterMs: 4500 },
+      { text: "Untuk mendarab pecahan dengan nombor bulat, kita darabkan pengangka dengan nombor bulat itu, dan penyebut kekal sama.", pauseAfterMs: 4500 },
+      { text: "Contohnya, dua per tiga darab sembilan. Dua darab sembilan ialah lapan belas, dan lapan belas bahagi tiga ialah enam.", pauseAfterMs: 5000 },
+      { text: "Jadi, dua per tiga daripada sembilan biji epal ialah enam biji epal.", pauseAfterMs: 4500 },
+      { text: "Sekarang kita cuba nombor bercampur pula. Satu setengah darab empat ialah enam.", pauseAfterMs: 9000 },
+      { text: "Hey assistant, boleh berikan satu contoh harian untuk kelas?", pauseAfterMs: 11000 },
+      { text: "Hey assistant, sediakan lima soalan berdasarkan pelajaran ini.", pauseAfterMs: 2000 },
+    ],
+  },
   pythagoras: {
     label: "Mathematics — Pythagoras' theorem (SRS §11)",
     lines: [

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import type { ClassroomState, ReelLanguageId } from "@/lib/types";
 import type { ClassroomEngine } from "@/lib/engine";
 import { REEL_LANGUAGES, REEL_LENGTHS, REEL_STYLES, reelLanguage } from "@/lib/reel/styles";
+import { bestVoice, isNaturalVoice, rankVoices } from "@/lib/voice";
 import { Toggle } from "./ui";
 
 const SELECT = "mt-1 w-full rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-sm";
@@ -22,7 +23,9 @@ export default function StylePanel({ state, engine }: { state: ClassroomState; e
 
   const prefix = reelLanguage(r.language).speech;
   const matching = voices.filter((v) => v.lang.toLowerCase().startsWith(prefix));
-  const shown = matching.length ? matching : voices;
+  const shown = rankVoices(matching.length ? matching : voices);
+  const auto = bestVoice(voices, prefix);
+  const hasNatural = shown.some(isNaturalVoice);
 
   return (
     <section className="card" aria-label="Video style">
@@ -57,11 +60,17 @@ export default function StylePanel({ state, engine }: { state: ClassroomState; e
           </div>
         </div>
         <div>
-          <label className="text-sm font-medium text-slate-200" htmlFor="reel-voice">Narrator voice</label>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-sm font-medium text-slate-200" htmlFor="reel-voice">AI voice</label>
+            <button className="btn btn-ghost !py-0.5 !text-xs" disabled={state.voice.speaking} onClick={() => engine.previewVoice()}>▶ Hear it</button>
+          </div>
           <select id="reel-voice" className={SELECT} value={r.voice} onChange={(e) => engine.updateReel({ voice: e.target.value })}>
-            <option value="">Automatic</option>
-            {shown.map((v) => <option key={v.name} value={v.name}>{v.name}</option>)}
+            <option value="">Automatic{auto ? ` (${auto.name})` : ""}</option>
+            {shown.map((v) => <option key={v.name} value={v.name}>{isNaturalVoice(v) ? "✨ " : ""}{v.name}</option>)}
           </select>
+          <span className="mt-1 block text-xs text-slate-400">
+            Used for videos, replies and quizzes.{voices.length > 0 && !hasNatural ? " For a more human voice, open this page in Microsoft Edge." : " ✨ marks the most natural voices."}
+          </span>
           {voices.length > 0 && !matching.length && (
             <span className="mt-1 block text-xs text-amber-300">
               This browser has no {reelLanguage(r.language).label} voice, so narration will sound off. Install one in Windows speech settings, or turn narration off.

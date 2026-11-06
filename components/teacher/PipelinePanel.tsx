@@ -105,6 +105,9 @@ export default function PipelinePanel({ state, engine }: { state: ClassroomState
                 {asset && t.kind === "content" && !t.isFallbackFor && t.status !== "held" && (
                   <button className="btn btn-ghost !py-1 !text-xs" onClick={() => engine.requestRevision(asset.id)}>↻ Make a different version</button>
                 )}
+                {t.kind === "challenge" && t.challengeId && t.status === "ready" && !state.agent.plan && state.presentation.mode === "idle" && (
+                  <button className="btn btn-primary !py-1 !text-xs" onClick={() => engine.openChallenge(t.challengeId!)}>▶ Start challenge</button>
+                )}
                 {t.kind === "quiz" && t.quizId && t.status === "ready" && (
                   <button className="btn btn-primary !py-1 !text-xs" onClick={() => engine.openQuiz(t.quizId!)}>▶ Start quiz</button>
                 )}

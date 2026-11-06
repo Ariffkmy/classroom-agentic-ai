@@ -1,4 +1,6 @@
 // Thin client for the server-side AI gateway.
+import type { SyllabusMatch, SyllabusQuery } from "./syllabus/match";
+
 export async function llmStatus(): Promise<{ enabled: boolean; model?: string; engine?: "api" | "claude-code" }> {
   try {
     const r = await fetch("/api/ai", { cache: "no-store" });
@@ -27,6 +29,16 @@ export async function llmStream(task: string, payload: Record<string, unknown>, 
     /* aborted or offline: the caller works from whatever text it already has */
   }
   return full;
+}
+
+/** Needs no model, so standards can still be found offline. */
+export async function lookupSyllabus(query: SyllabusQuery): Promise<SyllabusMatch[]> {
+  try {
+    const r = await fetch("/api/syllabus", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(query) });
+    return r.ok ? ((await r.json()).matches as SyllabusMatch[]) : [];
+  } catch {
+    return [];
+  }
 }
 
 export async function llmCall<T = unknown>(task: string, payload: Record<string, unknown>): Promise<T | null> {

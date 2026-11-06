@@ -68,7 +68,7 @@ export default function ContextPanel({ state, engine }: { state: ClassroomState;
               <span>📚 Curriculum mapping</span>
               {cur && (
                 <span className={`chip ${cur.verified ? "bg-emerald-500/15 text-emerald-200" : "bg-amber-500/15 text-amber-200"}`}>
-                  {cur.verified ? "✓ From configured source" : "⚠ Unverified"}
+                  {cur.url ? (cur.verified ? "✓ From DSKP" : "⚠ DSKP: check extraction") : cur.verified ? "✓ From configured source" : "⚠ Unverified"}
                 </span>
               )}
             </div>
@@ -81,7 +81,10 @@ export default function ContextPanel({ state, engine }: { state: ClassroomState;
                     <li key={o.code} className="flex gap-2 text-slate-300"><span className="font-mono text-teal-300">{o.code}</span><span>{o.text}</span></li>
                   ))}
                 </ul>
-                <div className="mt-1.5 text-[10px] text-slate-500">Source: {cur.source}</div>
+                {cur.next && cur.next.length > 0 && <div className="mt-1.5 text-[11px] text-slate-400">Comes next: {cur.next.join(" · ")}</div>}
+                <div className="mt-1.5 text-[10px] text-slate-500">
+                  Source: {cur.url ? <a className="underline hover:text-slate-300" href={cur.url} target="_blank" rel="noreferrer">{cur.source}</a> : cur.source}
+                </div>
               </div>
             ) : (
               <div className="rounded-lg border border-dashed border-slate-700 p-2.5 text-xs text-slate-500">Waiting for a confident topic before retrieving curriculum — the AI never invents references.</div>

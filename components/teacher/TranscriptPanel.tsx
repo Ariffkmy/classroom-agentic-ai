@@ -10,13 +10,14 @@ const QUICK = [
   ["🧩 Simpler", "Hey assistant, explain this in simpler language."],
   ["🎬 Animation", "Hey assistant, create an animation for this topic."],
   ["📝 5 questions", "Hey assistant, prepare five questions based on this lesson."],
+  ["🗺 Challenge", "Hey assistant, run a class challenge."],
   ["📋 Summary", "Hey assistant, give a summary of the lesson."],
   ["⏹ Stop", "Hey assistant, stop the current activity."],
 ];
 
 export default function TranscriptPanel({ state, engine }: { state: ClassroomState; engine: ClassroomEngine }) {
   const [text, setText] = useState("");
-  const [script, setScript] = useState("pythagoras");
+  const [script, setScript] = useState("pecahan");
   const listRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = listRef.current;

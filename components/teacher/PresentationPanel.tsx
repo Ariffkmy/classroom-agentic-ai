@@ -7,6 +7,8 @@ export default function PresentationPanel({ state, engine }: { state: ClassroomS
   const p = state.presentation;
   const asset = state.assets.find((a) => a.id === p.assetId);
   const waiting = state.assets.find((a) => a.id === p.waitingAssetId);
+  const ready = waiting ? `“${waiting.title}”` : state.agent.plan?.label;
+  const offered = ready && (p.mode === "idle" || p.mode === "results") && !state.agent.snoozedUntil;
   return (
     <section className="card" aria-label="Classroom display">
       <div className="card-h">
@@ -15,10 +17,16 @@ export default function PresentationPanel({ state, engine }: { state: ClassroomS
       </div>
       <div className="p-3">
         <ScaledStage state={state} className="aspect-video w-full rounded-xl ring-1 ring-slate-700" />
-        {waiting && p.mode === "idle" && (
-          <div className="mt-2 flex items-center justify-between gap-2 rounded-lg bg-indigo-500/10 p-2 text-xs text-indigo-100 ring-1 ring-indigo-400/30">
-            <span>⏳ “{waiting.title}” is ready — waiting for a natural pause so the AI doesn&apos;t interrupt you.</span>
-            <button className="btn btn-primary !py-1 !text-xs" onClick={() => engine.presentAsset(waiting.id)}>Present now</button>
+        {offered && (
+          <div className="mt-2 rounded-lg bg-indigo-500/10 p-2 text-xs text-indigo-100 ring-1 ring-indigo-400/30" role="status">
+            <p>
+              {state.settings.askFirst ? "✋ Ready when you are" : "⏳ Waiting for a natural pause"}: <b>{ready}</b>. Only you can see this. Say “show it”, “later” or “skip”.
+            </p>
+            <div className="mt-2 flex gap-2">
+              <button className="btn btn-primary !py-1 !text-xs" onClick={() => engine.showReady()}>Show now</button>
+              <button className="btn btn-ghost !py-1 !text-xs" onClick={() => engine.snoozeReady()}>Later</button>
+              <button className="btn btn-ghost !py-1 !text-xs" onClick={() => engine.skipReady()}>Skip</button>
+            </div>
           </div>
         )}
         <div className="mt-2 flex flex-wrap items-center gap-1.5">

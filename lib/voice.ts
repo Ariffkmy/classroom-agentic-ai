@@ -6,25 +6,34 @@ export interface VoiceChoice {
   voice: string; // exact browser voice name, or "" to pick one for the language
 }
 
+type VoiceInfo = Pick<SpeechSynthesisVoice, "name" | "lang" | "localService">;
+
+/** Edge names its best voices "Online (Natural)"; Google, Apple and others have their own labels. */
+export const isNaturalVoice = (v: VoiceInfo) => /natural|neural|premium|enhanced|^google /i.test(v.name);
+
+function score(v: VoiceInfo) {
+  return (/natural|neural/i.test(v.name) ? 8 : isNaturalVoice(v) ? 4 : 0) + (/^en-GB/i.test(v.lang) ? 2 : 0) + (/female|sonia|libby|yasmin/i.test(v.name) ? 1 : 0);
+}
+
+export const rankVoices = <T extends VoiceInfo>(voices: T[]) => [...voices].sort((a, b) => score(b) - score(a));
+
+export function bestVoice<T extends VoiceInfo>(voices: T[], lang: string): T | undefined {
+  const matching = voices.filter((v) => v.lang.toLowerCase().startsWith(lang.toLowerCase()));
+  return rankVoices(matching.length ? matching : voices)[0];
+}
+
 export class Speaker {
+  private remoteFailed = false; // once a cloud voice fails, stop trying them this session
+
   get available() {
     return typeof window !== "undefined" && "speechSynthesis" in window;
   }
 
-  private pickVoice() {
-    const voices = window.speechSynthesis.getVoices();
-    return (
-      voices.find((v) => /en-GB/i.test(v.lang) && /female|libby|sonia|serena|google uk english female/i.test(v.name)) ||
-      voices.find((v) => /en-(GB|US|AU)/i.test(v.lang)) ||
-      voices.find((v) => /^en/i.test(v.lang)) ||
-      voices[0]
-    );
-  }
-
   private resolveVoice(choice?: VoiceChoice) {
-    if (!choice) return this.pickVoice();
-    const voices = window.speechSynthesis.getVoices();
-    return voices.find((v) => v.name === choice.voice) ?? voices.find((v) => v.lang.toLowerCase().startsWith(choice.lang)) ?? this.pickVoice();
+    const all = window.speechSynthesis.getVoices();
+    const voices = this.remoteFailed ? all.filter((v) => v.localService) : all;
+    const picked = choice?.voice ? voices.find((v) => v.name === choice.voice) : undefined;
+    return picked ?? bestVoice(voices.length ? voices : all, choice?.lang ?? "en");
   }
 
   speak(text: string, onStart: () => void, onEnd: () => void, choice?: VoiceChoice) {
@@ -39,9 +48,12 @@ export class Speaker {
       u.voice = v;
       u.lang = v.lang;
     }
-    u.rate = 1.02;
-    u.pitch = 1.05;
+    // Natural voices already have their own rhythm, and changing the pitch makes them sound off.
+    const natural = v && isNaturalVoice(v);
+    u.rate = natural ? 1 : 1.02;
+    u.pitch = natural ? 1 : 1.05;
     let ended = false;
+    let retried = false;
     const end = () => {
       if (!ended) {
         ended = true;
@@ -49,8 +61,27 @@ export class Speaker {
       }
     };
     u.onstart = onStart;
-    u.onend = end;
-    u.onerror = end;
+    u.onend = () => {
+      if (!retried) end();
+    };
+    u.onerror = (e) => {
+      // Cloud voices need the internet. If one fails mid-lesson, say it again with a local voice.
+      if (v && !v.localService && e.error !== "canceled" && e.error !== "interrupted") {
+        this.remoteFailed = true;
+        retried = true;
+        const retry = new SpeechSynthesisUtterance(text);
+        const local = this.resolveVoice(choice);
+        if (local) {
+          retry.voice = local;
+          retry.lang = local.lang;
+        }
+        retry.onend = end;
+        retry.onerror = end;
+        window.speechSynthesis.speak(retry);
+        return;
+      }
+      end();
+    };
     window.speechSynthesis.speak(u);
     // Safety net: some browsers never fire onend.
     setTimeout(end, 2500 + text.length * 90);
